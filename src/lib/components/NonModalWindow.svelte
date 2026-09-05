@@ -11,11 +11,27 @@
 		backgroundRemoval,
 		removeBackground,
 		fileProfiles,
-		fileNameToId
+		fileNameToId,
+		licelFiles
 	} from '$lib/state/store';
+	import { get } from 'svelte/store';
 	import { onMount, onDestroy } from 'svelte';
 
-	let { id, x, y, title } = $props();
+	/** @typedef {import('licelfile-js').LicelFile} LicelFile */
+	/** @typedef {import('licelfile-js').LicelProfile} LicelProfile */
+
+	const channelPalette = [
+		'#3b82f6', // blue
+		'#10b981', // green
+		'#ef4444', // red
+		'#f59e0b', // amber
+		'#8b5cf6', // violet
+		'#ec4899', // pink
+		'#06b6d4', // cyan
+		'#84cc16' // lime
+	];
+
+	let { id, x, y, title, payload = {} } = $props();
 	let posX = $state(x);
 	let posY = $state(y);
 	let windowRef = $state(/** @type {HTMLDivElement | null} */ (null));
@@ -30,15 +46,55 @@
 	let windowWidth = $state(title.startsWith('График: ') ? 640 : 360);
 	let windowHeight = $state(/** @type {number | null} */ (null)); // null = auto, explicit px after manual resize
 
-	let config = $state({ method: 'average', height: '', referenceFile: null, referenceName: '' });
-	let channelStates = $state({}); // { channelName: boolean }
+	let config = $state(
+		/** @type {{ method: string, height: string, referenceFile: File | null, referenceName: string }} */ ({
+			method: 'average',
+			height: '',
+			referenceFile: null,
+			referenceName: ''
+		})
+	);
+	let channelStates = $state(/** @type {Record<string, boolean>} */ ({}));
+	// Static per-window data (resolved once at creation): real data or demo mock.
 	let fileName = $state('');
-	let profileId = $state(1);
+	/** @type {any} */
+	let licel = null;
+	/** @type {Array<{ name: string, color: string, points: Array<{ x: number, y: number }> }>} */
+	let channels = [];
 
-	// Extract filename from title "График: filename"
+	// Extract filename from title "График: filename" and resolve the data source.
+	// Real loaded files come from licelFiles (via window payload), demo rows fall back to mock profiles.
 	if (title.startsWith('График: ')) {
-		fileName = title.slice(8);
-		profileId = fileNameToId[fileName] || 1;
+		const graphName = title.slice(8);
+		fileName = graphName;
+		if (payload?.fileId != null) {
+			licel = get(licelFiles).get(payload.fileId) ?? null;
+		}
+		if (licel) {
+			channels = profilesToChannels(licel);
+		} else {
+			const mockId = fileNameToId[graphName] || 1;
+			channels = (fileProfiles[mockId] ?? []).map((ch) => ({ ...ch }));
+		}
+	}
+
+	/** @param {LicelFile} lf */
+	function profilesToChannels(lf) {
+		return (lf.profiles ?? [])
+			.filter((p) => p.active !== false)
+			.map((p, i) => {
+				const binWidth = p.binWidth > 0 ? p.binWidth : 1;
+				const data = p.data ? Array.from(p.data) : [];
+				const points = data.map((y, j) => ({ x: j * binWidth, y }));
+				const mode =
+					p.deviceID === 'BC' ? 'фотон' : p.deviceID === 'BT' ? 'аналог' : p.deviceID || 'канал';
+				const pol = p.polarization ? ` (${p.polarization})` : '';
+				return {
+					name: `${p.wavelength} нм${pol} · ${mode}`,
+					color: channelPalette[i % channelPalette.length],
+					points
+				};
+			});
 	}
 
 	$effect(() => {
@@ -48,21 +104,18 @@
 		return unsub;
 	});
 
-	// Initialize channel states from profiles
-	$effect(() => {
-		if (!profileId) return;
-		const profiles = fileProfiles[profileId];
-		if (profiles) {
-			const states = {};
-			for (const ch of profiles) {
-				states[ch.name] = true;
-			}
-			channelStates = states;
+	// Initialize channel states (all enabled by default) synchronously before mount
+	{
+		/** @type {Record<string, boolean>} */
+		const states = {};
+		for (const ch of channels) {
+			states[ch.name] = true;
 		}
-	});
+		channelStates = states;
+	}
 
 	onMount(() => {
-		if (!chartRef || !profileId) return;
+		if (!chartRef || channels.length === 0) return;
 		initChart();
 	});
 
@@ -96,24 +149,24 @@
 	function initChart() {
 		import('plotly.js-dist-min').then((Plotly) => {
 			PlotlyLib = Plotly;
-			const profiles = fileProfiles[profileId];
-			if (!profiles) return;
+			if (channels.length === 0) return;
 
-			const traces = profiles
-				.filter((ch) => channelStates[ch.name])
-				.map((ch) => ({
-					x: ch.points.map((p) => p.x),
-					y: ch.points.map((p) => p.y),
-					name: ch.name,
-					mode: 'lines',
-					line: { color: ch.color, width: 1.5 },
-					connectgaps: false
-				}));
+			const traces = buildTraces();
+
+			let xRange = [0, 17000];
+			if (licel) {
+				let maxRange = 0;
+				for (const ch of channels) {
+					const last = ch.points[ch.points.length - 1];
+					if (last) maxRange = Math.max(maxRange, last.x);
+				}
+				xRange = [0, maxRange || 1];
+			}
 
 			const layout = {
 				xaxis: {
 					title: { text: 'Дистанция, м' },
-					range: [0, 17000],
+					range: xRange,
 					zeroline: false,
 					automargin: true
 				},
@@ -138,18 +191,14 @@
 				modeBarButtonsToRemove: ['lasso2d', 'select2d']
 			};
 
-			Plotly.newPlot(chartRef, traces, layout, configPlotly).then((instance) => {
+			Plotly.newPlot(chartRef, traces, layout, configPlotly).then((/** @type {any} */ instance) => {
 				plotlyInstance = instance;
 			});
 		});
 	}
 
-	function updateChart() {
-		if (!PlotlyLib || !plotlyInstance || !chartRef) return;
-		const profiles = fileProfiles[profileId];
-		if (!profiles) return;
-
-		const traces = profiles
+	function buildTraces() {
+		return channels
 			.filter((ch) => channelStates[ch.name])
 			.map((ch) => ({
 				x: ch.points.map((p) => p.x),
@@ -159,10 +208,15 @@
 				line: { color: ch.color, width: 1.5 },
 				connectgaps: false
 			}));
-
-		PlotlyLib.react(chartRef, traces, plotlyInstance.layout);
 	}
 
+	function updateChart() {
+		if (!PlotlyLib || !plotlyInstance || !chartRef) return;
+		if (channels.length === 0) return;
+		PlotlyLib.react(chartRef, buildTraces(), plotlyInstance.layout);
+	}
+
+	/** @param {string} name */
 	function handleChannelToggle(name) {
 		channelStates = { ...channelStates, [name]: !channelStates[name] };
 		updateChart();

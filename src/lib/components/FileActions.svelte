@@ -1,5 +1,15 @@
 <script>
-	import { files, toggleSelectAll, deleteSelected, removeBackground, mergeChannels, openFiles, cropByHeight, addWindow } from '$lib/state/store';
+	import {
+		files,
+		toggleSelectAll,
+		deleteSelected,
+		removeBackground,
+		mergeChannels,
+		openFiles,
+		cropByHeight,
+		addWindow,
+		showError
+	} from '$lib/state/store';
 
 	let fileItems = $state([]);
 	let fileInput = $state(null);
@@ -38,18 +48,20 @@
 		fileInput?.click();
 	}
 
-	function handleFileSelect(e) {
+	async function handleFileSelect(e) {
 		const file = e.target.files?.[0];
 		if (!file) return;
 
-		const reader = new FileReader();
-		reader.onload = () => {
-			const buffer = reader.result;
+		try {
+			const buffer = await file.arrayBuffer();
 			openFiles(buffer, file.name);
-		};
-		reader.readAsArrayBuffer(file);
-		// Reset input so same file can be selected again
-		e.target.value = '';
+		} catch (err) {
+			const detail = err instanceof Error ? err.message : String(err);
+			showError(`Не удалось прочитать файл "${file.name}": ${detail}`);
+		} finally {
+			// Reset input so same file can be selected again
+			e.target.value = '';
+		}
 	}
 
 	function handleCropByHeight() {
@@ -58,7 +70,7 @@
 	}
 </script>
 
-<div class="p-2 flex flex-col gap-1.5">
+<div class="flex flex-col gap-1.5 p-2">
 	<!-- Hidden file input -->
 	<input
 		bind:this={fileInput}
@@ -69,45 +81,45 @@
 	/>
 	<button
 		onclick={handleSelectAll}
-		class="w-full text-left text-xs px-2.5 py-1.5 rounded bg-gray-100 hover:bg-gray-200 transition-colors"
+		class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
 	>
 		Выделить все
 	</button>
 	<button
 		onclick={handleDeselectAll}
-		class="w-full text-left text-xs px-2.5 py-1.5 rounded bg-gray-100 hover:bg-gray-200 transition-colors"
+		class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
 	>
 		Снять выделение
 	</button>
 	<button
 		onclick={handleDeleteSelected}
-		class="w-full text-left text-xs px-2.5 py-1.5 rounded bg-red-50 hover:bg-red-100 text-red-700 transition-colors"
+		class="w-full rounded bg-red-50 px-2.5 py-1.5 text-left text-xs text-red-700 transition-colors hover:bg-red-100"
 	>
 		Удалить выделенные
 	</button>
-	<div class="border-t border-gray-200 my-1"></div>
+	<div class="my-1 border-t border-gray-200"></div>
 	<button
 		onclick={handleRemoveBackground}
-		class="w-full text-left text-xs px-2.5 py-1.5 rounded bg-gray-100 hover:bg-gray-200 transition-colors"
+		class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
 	>
 		Удалить фон
 	</button>
 	<button
 		onclick={handleMergeChannels}
-		class="w-full text-left text-xs px-2.5 py-1.5 rounded bg-gray-100 hover:bg-gray-200 transition-colors"
+		class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
 	>
 		Склеить каналы
 	</button>
 	<button
 		onclick={handleCropByHeight}
-		class="w-full text-left text-xs px-2.5 py-1.5 rounded bg-gray-100 hover:bg-gray-200 transition-colors"
+		class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
 	>
 		Обрезать по высоте
 	</button>
-	<div class="border-t border-gray-200 my-1"></div>
+	<div class="my-1 border-t border-gray-200"></div>
 	<button
 		onclick={handleOpenFiles}
-		class="w-full text-left text-xs px-2.5 py-1.5 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 transition-colors"
+		class="w-full rounded bg-blue-50 px-2.5 py-1.5 text-left text-xs text-blue-700 transition-colors hover:bg-blue-100"
 	>
 		Открыть файлы
 	</button>

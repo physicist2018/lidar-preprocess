@@ -2,6 +2,7 @@
 	import FileList from '$lib/components/FileList.svelte';
 	import FileActions from '$lib/components/FileActions.svelte';
 	import NonModalWindow from '$lib/components/NonModalWindow.svelte';
+	import ErrorDialog from '$lib/components/ErrorDialog.svelte';
 	import { openWindows, addWindow } from '$lib/state/store';
 
 	let leftPercent = $state(20);
@@ -24,18 +25,18 @@
 	}
 
 	function handleFileDoubleClick(file) {
-		addWindow(`График: ${file.name}`);
+		addWindow(`График: ${file.name}`, undefined, { fileId: file.id });
 	}
 </script>
 
-<div class="h-screen w-screen flex flex-col overflow-hidden bg-gray-50">
+<div class="flex h-screen w-screen flex-col overflow-hidden bg-gray-50">
 	<!-- Top bar -->
-	<header class="h-12 bg-white border-b border-gray-200 flex items-center px-4 shrink-0">
+	<header class="flex h-12 shrink-0 items-center border-b border-gray-200 bg-white px-4">
 		<h1 class="text-lg font-semibold text-gray-800">Lidar Viewer</h1>
 		<div class="ml-auto flex gap-2">
 			<button
 				onclick={handleAddDemoWindow}
-				class="text-xs px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+				class="rounded bg-blue-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-blue-700"
 			>
 				+ Добавить окно
 			</button>
@@ -43,14 +44,14 @@
 	</header>
 
 	<!-- Main content -->
-	<div class="flex flex-1 h-full">
+	<div class="flex h-full flex-1">
 		<!-- Left panel -->
 		<div
-			class="flex flex-col h-full bg-white border-r border-gray-200 transition-[width] duration-75"
+			class="flex h-full flex-col border-r border-gray-200 bg-white transition-[width] duration-75"
 			style="width: {leftPercent}%"
 		>
-			<div class="px-3 py-2 border-b border-gray-200">
-				<h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Файлы</h2>
+			<div class="border-b border-gray-200 px-3 py-2">
+				<h2 class="text-xs font-semibold tracking-wider text-gray-500 uppercase">Файлы</h2>
 			</div>
 			<div class="flex-1 overflow-auto">
 				<FileList onDoubleClick={handleFileDoubleClick} />
@@ -63,7 +64,7 @@
 		<!-- Resizer -->
 		<div
 			role="presentation"
-			class="w-1.5 cursor-col-resize bg-gray-300 hover:bg-blue-500 active:bg-blue-600 transition-colors shrink-0"
+			class="w-1.5 shrink-0 cursor-col-resize bg-gray-300 transition-colors hover:bg-blue-500 active:bg-blue-600"
 			onmousedown={(e) => {
 				e.preventDefault();
 				let isDragging = false;
@@ -90,12 +91,14 @@
 
 		<!-- Right panel -->
 		<div
-			class="relative h-full bg-gray-50 transition-[width] duration-75 overflow-auto"
+			class="relative h-full overflow-auto bg-gray-50 transition-[width] duration-75"
 			style="width: {100 - leftPercent}%"
 		>
 			{#each windows as win (win.id)}
-				<NonModalWindow id={win.id} x={win.x} y={win.y} title={win.title} />
+				<NonModalWindow id={win.id} x={win.x} y={win.y} title={win.title} payload={win.payload} />
 			{/each}
 		</div>
 	</div>
+
+	<ErrorDialog />
 </div>
