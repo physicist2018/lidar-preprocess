@@ -49,7 +49,7 @@
 	</header>
 
 	<!-- Main content -->
-	<div class="flex h-full flex-1">
+	<div class="flex h-full min-h-0 flex-1 overflow-hidden">
 		<!-- Left panel -->
 		<div
 			class="flex h-full flex-col border-r border-gray-200 bg-white transition-[width] duration-75"
@@ -61,7 +61,7 @@
 			<div class="flex-1 overflow-auto">
 				<FileList onDoubleClick={handleFileDoubleClick} />
 			</div>
-			<div class="border-t border-gray-200">
+			<div class="min-h-0 shrink overflow-y-auto border-t border-gray-200">
 				<FileActions />
 			</div>
 		</div>

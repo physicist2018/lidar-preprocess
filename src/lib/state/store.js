@@ -36,6 +36,15 @@ export const backgroundRemoval = writable(
 	})
 );
 
+// --- Median filtering state ---
+export const MEDIAN_WINDOW_MAX = 101;
+
+export const medianFilter = writable(
+	/** @type {{ windowSize: string }} */ ({
+		windowSize: ''
+	})
+);
+
 // --- Saved channel selection for graph windows ---
 // Snapshot of channel visibility (channel name -> enabled) remembered from a
 // graph window; applied to graph windows opened afterwards.
@@ -90,6 +99,65 @@ export function removeBackground(params) {
 	// await persistSession();
 	// Reset state
 	backgroundRemoval.set({ method: 'average', height: '', referenceFile: null });
+}
+
+/**
+ * Apply a median filter to a copy of the source array and return a new array.
+ * Uses a full window per point with indices clamped to the array bounds.
+ * @param {Float64Array} data
+ * @param {number} windowSize odd integer in [3, MEDIAN_WINDOW_MAX]
+ * @returns {Float64Array}
+ */
+function medianFilterValues(data, windowSize) {
+	const n = data.length;
+	if (n === 0) return new Float64Array(0);
+	let size = Number.isSafeInteger(windowSize) && windowSize >= 3 ? windowSize : 3;
+	if (size > MEDIAN_WINDOW_MAX) size = MEDIAN_WINDOW_MAX;
+	if (size % 2 === 0) size -= 1;
+	const radius = (size - 1) / 2;
+	const out = new Float64Array(n);
+	const windowValues = new Array(size);
+	for (let i = 0; i < n; i++) {
+		for (let k = 0; k < size; k++) {
+			let idx = i + k - radius;
+			if (idx < 0) idx = 0;
+			else if (idx >= n) idx = n - 1;
+			windowValues[k] = data[idx];
+		}
+		windowValues.sort((a, b) => a - b);
+		out[i] = windowValues[radius];
+	}
+	return out;
+}
+
+/**
+ * Apply a median filter with the given window size to every channel of every
+ * selected file, then persist the updated dataset.
+ * @param {number} windowSize
+ */
+export async function medianFiltering(windowSize) {
+	const selected = get(files)
+		.filter((f) => f.selected)
+		.map((f) => f.id);
+	if (selected.length === 0) {
+		showError('Не выделено ни одного файла.');
+		return;
+	}
+
+	const data = get(licelFiles);
+	for (const id of selected) {
+		const lf = data.get(id);
+		if (!lf) continue;
+		for (const p of lf.profiles ?? []) {
+			if (p.active === false || !p.data || p.data.length === 0) continue;
+			p.data = medianFilterValues(p.data, windowSize);
+		}
+	}
+	licelFiles.set(new Map(data));
+
+	medianFilter.set({ windowSize: '' });
+	console.log('medianFiltering', { selected, windowSize });
+	await persistSession();
 }
 
 export function mergeChannels() {

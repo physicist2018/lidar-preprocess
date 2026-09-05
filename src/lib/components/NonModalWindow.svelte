@@ -10,6 +10,9 @@
 		removeWindow,
 		backgroundRemoval,
 		removeBackground,
+		medianFilter,
+		medianFiltering,
+		MEDIAN_WINDOW_MAX,
 		licelFiles,
 		savedChannelSelection,
 		rememberChannelSelection
@@ -96,6 +99,15 @@
 	$effect(() => {
 		const unsub = backgroundRemoval.subscribe((val) => {
 			config = { ...val, referenceName: val.referenceFile?.name || '' };
+		});
+		return unsub;
+	});
+
+	let medianWindowSize = $state('');
+
+	$effect(() => {
+		const unsub = medianFilter.subscribe((val) => {
+			medianWindowSize = val.windowSize;
 		});
 		return unsub;
 	});
@@ -327,6 +339,24 @@
 		}
 		return !config.height || Number(config.height) < 0;
 	}
+
+	/** @returns {number | null} */
+	function parseMedianWindowSize() {
+		const value = Number(medianWindowSize);
+		if (!Number.isSafeInteger(value) || value % 2 === 0 || value < 3 || value > MEDIAN_WINDOW_MAX)
+			return null;
+		return value;
+	}
+
+	function isMedianWindowEmpty() {
+		return medianWindowSize === '' || medianWindowSize == null;
+	}
+
+	function handleMedianApply() {
+		const size = parseMedianWindowSize();
+		if (size == null) return;
+		medianFiltering(size);
+	}
 </script>
 
 <div
@@ -524,6 +554,38 @@
 							/>
 						</label>
 					</div>
+				</div>
+			{:else if title === 'Медианная фильтрация'}
+				<div class="space-y-3">
+					<div>
+						<label class="mb-1 block text-xs text-gray-500"
+							>Размер окна фильтрации (нечётное число)</label
+						>
+						<input
+							type="number"
+							bind:value={medianWindowSize}
+							min="3"
+							max={MEDIAN_WINDOW_MAX}
+							step="2"
+							placeholder="5"
+							class="w-full rounded border px-2 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+						/>
+						{#if !isMedianWindowEmpty() && parseMedianWindowSize() == null}
+							<p class="mt-1 text-xs text-red-600">
+								Введите нечётное целое число от 3 до {MEDIAN_WINDOW_MAX}
+							</p>
+						{/if}
+					</div>
+					<button
+						onclick={handleMedianApply}
+						disabled={parseMedianWindowSize() == null}
+						class="w-full rounded py-1.5 text-sm font-medium transition-colors {parseMedianWindowSize() ==
+						null
+							? 'cursor-not-allowed bg-gray-200 text-gray-400'
+							: 'bg-blue-600 text-white hover:bg-blue-700'}"
+					>
+						Применить
+					</button>
 				</div>
 			{:else}
 				<div class="text-sm text-gray-600">

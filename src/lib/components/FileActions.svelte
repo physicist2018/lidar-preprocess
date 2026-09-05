@@ -39,6 +39,10 @@
 		addWindow('Удаление фона');
 	}
 
+	function handleMedianFiltering() {
+		addWindow('Медианная фильтрация');
+	}
+
 	function handleMergeChannels() {
 		mergeChannels();
 		addWindow('Склейка каналов');
@@ -98,6 +102,12 @@
 		Удалить выделенные
 	</button>
 	<div class="my-1 border-t border-gray-200"></div>
+	<button
+		onclick={handleMedianFiltering}
+		class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
+	>
+		Медианная фильтрация
+	</button>
 	<button
 		onclick={handleRemoveBackground}
 		class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
