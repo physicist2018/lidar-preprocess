@@ -30,7 +30,7 @@
 	let windowRef = $state(/** @type {HTMLDivElement | null} */ (null));
 	let isDragging = $state(false);
 	let dragOffset = { x: 0, y: 0 };
-	let zIndex = $state(10);
+	let zIndex = $state(getNextZIndex());
 	let chartRef = $state(/** @type {HTMLDivElement | null} */ (null));
 	let plotlyInstance = $state(/** @type {any} */ (null));
 	let PlotlyLib = /** @type {any} */ (null);
