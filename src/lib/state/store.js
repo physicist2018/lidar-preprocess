@@ -1,5 +1,9 @@
 import { writable, get } from 'svelte/store';
-import { newLicelPackFromZipBuffer, savePackToZipBuffer } from 'licelfile-js';
+import {
+	newLicelPackFromZipBuffer,
+	savePackToZipBuffer,
+	loadLicelFileFromBuffer
+} from 'licelfile-js';
 import { saveSession, loadSession } from './persistence';
 
 // --- File store ---
@@ -93,19 +97,248 @@ export async function deleteSelected() {
 	await persistSession();
 }
 
+// --- Background removal helpers ---
+
+/** Stable channel signature used to pair profiles across files.
+ * @param {any} p
+ */
+function profileKey(p) {
+	return `${p.deviceID || ''}|${p.wavelength || ''}|${p.polarization || ''}`;
+}
+
+/** Human-readable channel description (same convention as graph windows).
+ * @param {any} p
+ */
+function profileLabel(p) {
+	const mode =
+		p.deviceID === 'BC' ? 'фотон' : p.deviceID === 'BT' ? 'аналог' : p.deviceID || 'канал';
+	const pol = p.polarization ? ` (${p.polarization})` : '';
+	return `${p.wavelength || '?'} нм${pol} · ${mode}`;
+}
+
+/** @param {Float64Array} values */
+function meanValue(values) {
+	let sum = 0;
+	for (let i = 0; i < values.length; i++) sum += values[i];
+	return sum / values.length;
+}
+
+/** @param {Float64Array} values */
+function medianValue(values) {
+	if (values.length === 0) return NaN;
+	const sorted = Float64Array.from(values);
+	sorted.sort();
+	const mid = sorted.length >> 1;
+	return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
 /**
+ * Subtract a reference profile from a target profile element-wise over the
+ * overlapping range; the target is trimmed to that range.
+ * @param {any} target
+ * @param {any} ref
+ */
+function subtractProfileReference(target, ref) {
+	const n = Math.min(target.data.length, ref.data.length);
+	const out = new Float64Array(n);
+	for (let i = 0; i < n; i++) out[i] = target.data[i] - ref.data[i];
+	target.data = out;
+	target.nDataPoints = n;
+}
+
+/**
+ * Estimate the background of a channel as the mean/median of its samples from
+ * the given height (meters) to the end of the profile and subtract it from the
+ * whole channel.
+ * @param {any} profile
+ * @param {number} height
+ * @param {'average' | 'median'} method
+ */
+function subtractProfileStatistic(profile, height, method) {
+	const start = Math.floor(height / profile.binWidth);
+	const tail = profile.data.subarray(start);
+	const bg = method === 'median' ? medianValue(tail) : meanValue(tail);
+	const out = new Float64Array(profile.data.length);
+	for (let i = 0; i < profile.data.length; i++) out[i] = profile.data[i] - bg;
+	profile.data = out;
+}
+
+/**
+ * Subtract the corresponding channel of a reference Licel file from every
+ * channel of every selected file. Channels are paired by wavelength,
+ * polarization and device mode.
+ * @param {number[]} selected
+ * @param {Map<number, string>} fileNames
+ * @param {Map<number, any>} data
+ * @param {File} referenceFile
+ * @returns {Promise<boolean>}
+ */
+async function subtractReferenceFromFiles(selected, fileNames, data, referenceFile) {
+	/** @type {Map<string, any>} */
+	let refChannels;
+	try {
+		const buffer = await referenceFile.arrayBuffer();
+		const ref = loadLicelFileFromBuffer(new Uint8Array(buffer));
+		refChannels = new Map();
+		for (const p of ref.profiles ?? []) {
+			if (p.active === false || !p.data || p.data.length === 0) continue;
+			const key = profileKey(p);
+			if (refChannels.has(key)) {
+				showError(
+					`В референсном файле "${referenceFile.name}" несколько каналов с одинаковыми параметрами (${profileLabel(p)}).`
+				);
+				return false;
+			}
+			refChannels.set(key, p);
+		}
+	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
+		showError(`Не удалось прочитать референсный файл "${referenceFile.name}": ${detail}`);
+		return false;
+	}
+	if (refChannels.size === 0) {
+		showError(`В референсном файле "${referenceFile.name}" нет каналов с данными.`);
+		return false;
+	}
+	for (const p of refChannels.values()) {
+		for (let i = 0; i < p.data.length; i++) {
+			if (!Number.isFinite(p.data[i])) {
+				showError(
+					`Канал ${profileLabel(p)} референсного файла "${referenceFile.name}" содержит нечисловые значения.`
+				);
+				return false;
+			}
+		}
+	}
+	for (const id of selected) {
+		const lf = data.get(id);
+		if (!lf) continue;
+		const fileName = fileNames.get(id) ?? `#${id}`;
+		for (const p of lf.profiles ?? []) {
+			if (p.active === false || !p.data || p.data.length === 0) continue;
+			const refProfile = refChannels.get(profileKey(p));
+			if (!refProfile) {
+				showError(
+					`В референсном файле "${referenceFile.name}" нет канала ${profileLabel(p)} (файл "${fileName}").`
+				);
+				return false;
+			}
+			const binScale = Math.max(Math.abs(p.binWidth), Math.abs(refProfile.binWidth));
+			if (Math.abs(p.binWidth - refProfile.binWidth) > 1e-6 * binScale) {
+				showError(
+					`Ширина бина канала ${profileLabel(p)} файла "${fileName}" (${p.binWidth} м) не совпадает с референсным каналом (${refProfile.binWidth} м).`
+				);
+				return false;
+			}
+		}
+	}
+	for (const id of selected) {
+		const lf = data.get(id);
+		if (!lf) continue;
+		for (const p of lf.profiles ?? []) {
+			if (p.active === false || !p.data || p.data.length === 0) continue;
+			subtractProfileReference(p, refChannels.get(profileKey(p)));
+		}
+	}
+	return true;
+}
+
+/**
+ * Estimate the background of every channel of every selected file as the
+ * mean/median of its samples from the given height (meters) to the end of the
+ * profile and subtract it from the whole channel.
+ * @param {number[]} selected
+ * @param {Map<number, string>} fileNames
+ * @param {Map<number, any>} data
+ * @param {number} height
+ * @param {'average' | 'median'} method
+ * @returns {boolean}
+ */
+function subtractStatisticFromFiles(selected, fileNames, data, height, method) {
+	for (const id of selected) {
+		const lf = data.get(id);
+		if (!lf) continue;
+		const fileName = fileNames.get(id) ?? `#${id}`;
+		for (const p of lf.profiles ?? []) {
+			if (p.active === false || !p.data || p.data.length === 0) continue;
+			if (!(p.binWidth > 0)) continue;
+			const start = Math.floor(height / p.binWidth);
+			if (start >= p.data.length) {
+				showError(
+					`Канал ${profileLabel(p)} файла "${fileName}" короче высоты начала (${height} м).`
+				);
+				return false;
+			}
+			for (let i = 0; i < p.data.length; i++) {
+				if (!Number.isFinite(p.data[i])) {
+					showError(`Канал ${profileLabel(p)} файла "${fileName}" содержит нечисловые значения.`);
+					return false;
+				}
+			}
+		}
+	}
+	for (const id of selected) {
+		const lf = data.get(id);
+		if (!lf) continue;
+		for (const p of lf.profiles ?? []) {
+			if (p.active === false || !p.data || p.data.length === 0) continue;
+			if (!(p.binWidth > 0)) continue;
+			subtractProfileStatistic(p, height, method);
+		}
+	}
+	return true;
+}
+
+/**
+ * Remove background from every channel of every selected file.
+ * For "average"/"median" the background level is the respective statistic of
+ * each channel's samples from the given height to the end of the profile,
+ * subtracted across the whole channel. For "reference" every channel is
+ * corrected sample-by-sample with the matching channel of a reference file
+ * (matched by wavelength, polarization and device mode).
  * @param {{ method?: string, height?: number | null, referenceFile?: File | null }} [params]
  */
-export function removeBackground(params) {
-	// params: { method, height, referenceFile }
+export async function removeBackground(params = {}) {
+	const { method = 'average', height = null, referenceFile = null } = params;
+
 	const selected = get(files)
 		.filter((f) => f.selected)
 		.map((f) => f.id);
-	console.log('removeBackground', { selected, ...params });
-	// TODO: mutate profile data (background subtraction), then persist the new state:
-	// await persistSession();
-	// Reset state
+	if (selected.length === 0) {
+		showError('Не выделено ни одного файла.');
+		return;
+	}
+
+	const data = get(licelFiles);
+	/** @type {Map<number, string>} */
+	const fileNames = new Map(get(files).map((f) => [f.id, f.name]));
+
+	let ok = false;
+	if (method === 'reference') {
+		if (!referenceFile) {
+			showError('Укажите референсный файл.');
+			return;
+		}
+		ok = await subtractReferenceFromFiles(selected, fileNames, data, referenceFile);
+	} else if (method === 'average' || method === 'median') {
+		const bgHeight = /** @type {number} */ (height);
+		if (!Number.isFinite(bgHeight) || bgHeight < 0) {
+			showError('Укажите корректную высоту начала (неотрицательное число метров).');
+			return;
+		}
+		ok = subtractStatisticFromFiles(selected, fileNames, data, bgHeight, method);
+	} else {
+		showError(`Неизвестный метод удаления фона: ${method}.`);
+		return;
+	}
+	if (!ok) return;
+
+	licelFiles.set(new Map(data));
+	refreshFileSizes(selected);
+
 	backgroundRemoval.set({ method: 'average', height: '', referenceFile: null });
+	console.log('removeBackground', { method, height, referenceFile: referenceFile?.name, selected });
+	await persistSession();
 }
 
 /**

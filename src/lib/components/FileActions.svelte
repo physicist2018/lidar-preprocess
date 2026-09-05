@@ -3,7 +3,6 @@
 		files,
 		toggleSelectAll,
 		deleteSelected,
-		removeBackground,
 		mergeChannels,
 		openFiles,
 		savePackToZip,
@@ -35,7 +34,6 @@
 	}
 
 	function handleRemoveBackground() {
-		removeBackground();
 		addWindow('Удаление фона');
 	}
 

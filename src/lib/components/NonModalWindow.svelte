@@ -60,7 +60,8 @@
 		})
 	);
 	let channelStates = $state(/** @type {Record<string, boolean>} */ ({}));
-	// Static per-window data (resolved once at creation) from the current dataset.
+	// Per-window data resolved from the current dataset; refreshed whenever
+	// licelFiles changes so graph windows reflect data-modifying operations.
 	let fileName = $state('');
 	/** @type {any} */
 	let licel = null;
@@ -135,12 +136,41 @@
 		channelStates = states;
 	}
 
+	// Keep graph windows in sync with the current dataset. Data-modifying
+	// operations (background removal, crop by height, median filtering) mutate
+	// profiles in place and publish a new licelFiles map, so re-read the file
+	// and redraw the chart with fresh channel data instead of the snapshot taken
+	// at window creation. The subscription is registered in onMount (not in
+	// $effect) so that state writes here cannot re-trigger the effect.
+	/** @type {(() => void) | null} */
+	let datasetUnsub = null;
+
 	onMount(() => {
 		if (!chartRef || channels.length === 0) return;
 		initChart();
+		if (title.startsWith('График: ') && payload?.fileId != null) {
+			const fileId = payload.fileId;
+			datasetUnsub = licelFiles.subscribe((map) => {
+				const next = map.get(fileId);
+				if (!next) return;
+				licel = next;
+				const rebuilt = profilesToChannels(next);
+				const nextStates = { ...channelStates };
+				for (const ch of rebuilt) {
+					if (!(ch.name in nextStates)) nextStates[ch.name] = true;
+				}
+				channelStates = nextStates;
+				channels = rebuilt;
+				updateChart();
+			});
+		}
 	});
 
 	onDestroy(() => {
+		if (datasetUnsub) {
+			datasetUnsub();
+			datasetUnsub = null;
+		}
 		if (plotlyInstance && PlotlyLib) {
 			PlotlyLib.purge(chartRef);
 			plotlyInstance = null;
@@ -337,18 +367,36 @@
 	}
 
 	function handleApply() {
-		removeBackground({
-			method: config.method,
-			height: config.method === 'reference' ? null : Number(config.height),
-			referenceFile: config.method === 'reference' ? config.referenceFile : null
-		});
+		if (config.method === 'reference') {
+			removeBackground({
+				method: config.method,
+				height: null,
+				referenceFile: config.referenceFile
+			});
+			return;
+		}
+		const height = parseBgHeight();
+		if (height == null) return;
+		removeBackground({ method: config.method, height, referenceFile: null });
+	}
+
+	/** @returns {number | null} */
+	function parseBgHeight() {
+		if (config.height === '' || config.height == null) return null;
+		const value = Number(config.height);
+		if (!Number.isFinite(value) || value < 0) return null;
+		return value;
+	}
+
+	function isBgHeightEmpty() {
+		return config.height === '' || config.height == null;
 	}
 
 	function isApplyDisabled() {
 		if (config.method === 'reference') {
 			return !config.referenceFile;
 		}
-		return !config.height || Number(config.height) < 0;
+		return parseBgHeight() == null;
 	}
 
 	/** @returns {number | null} */
@@ -515,7 +563,7 @@
 					<!-- Height input for average/median -->
 					{#if config.method === 'average' || config.method === 'median'}
 						<div>
-							<label class="mb-1 block text-xs text-gray-500">Высота начала</label>
+							<label class="mb-1 block text-xs text-gray-500">Высота начала, м</label>
 							<input
 								type="number"
 								bind:value={config.height}
@@ -523,6 +571,12 @@
 								placeholder="80000"
 								class="w-full rounded border px-2 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
 							/>
+							{#if !isBgHeightEmpty() && parseBgHeight() == null}
+								<p class="mt-1 text-xs text-red-600">Введите неотрицательное число метров</p>
+							{/if}
+							<p class="mt-1 text-xs text-gray-400">
+								Фон оценивается по отсчётам от этой высоты до конца канала и вычитается из сигнала.
+							</p>
 						</div>
 					{/if}
 
