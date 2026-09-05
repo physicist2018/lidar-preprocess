@@ -6,14 +6,7 @@
 </script>
 
 <script>
-	import {
-		removeWindow,
-		backgroundRemoval,
-		removeBackground,
-		fileProfiles,
-		fileNameToId,
-		licelFiles
-	} from '$lib/state/store';
+	import { removeWindow, backgroundRemoval, removeBackground, licelFiles } from '$lib/state/store';
 	import { get } from 'svelte/store';
 	import { onMount, onDestroy } from 'svelte';
 
@@ -55,26 +48,22 @@
 		})
 	);
 	let channelStates = $state(/** @type {Record<string, boolean>} */ ({}));
-	// Static per-window data (resolved once at creation): real data or demo mock.
+	// Static per-window data (resolved once at creation) from the current dataset.
 	let fileName = $state('');
 	/** @type {any} */
 	let licel = null;
 	/** @type {Array<{ name: string, color: string, points: Array<{ x: number, y: number }> }>} */
 	let channels = [];
 
-	// Extract filename from title "График: filename" and resolve the data source.
-	// Real loaded files come from licelFiles (via window payload), demo rows fall back to mock profiles.
+	// Extract filename from title "График: filename" and resolve the data source
+	// from the current working dataset (licelFiles, keyed by file id via window payload).
 	if (title.startsWith('График: ')) {
-		const graphName = title.slice(8);
-		fileName = graphName;
+		fileName = title.slice(8);
 		if (payload?.fileId != null) {
 			licel = get(licelFiles).get(payload.fileId) ?? null;
 		}
 		if (licel) {
 			channels = profilesToChannels(licel);
-		} else {
-			const mockId = fileNameToId[graphName] || 1;
-			channels = (fileProfiles[mockId] ?? []).map((ch) => ({ ...ch }));
 		}
 	}
 
@@ -391,7 +380,13 @@
 
 			<!-- Right panel: chart -->
 			<div class="flex-1 p-2">
-				<div bind:this={chartRef} style="width: 100%; height: 100%; min-height: 300px;"></div>
+				{#if channels.length === 0}
+					<div class="flex h-full items-center justify-center text-sm text-gray-400">
+						Данные файла недоступны
+					</div>
+				{:else}
+					<div bind:this={chartRef} style="width: 100%; height: 100%; min-height: 300px;"></div>
+				{/if}
 			</div>
 		</div>
 	{:else}

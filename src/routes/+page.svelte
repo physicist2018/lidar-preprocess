@@ -3,11 +3,16 @@
 	import FileActions from '$lib/components/FileActions.svelte';
 	import NonModalWindow from '$lib/components/NonModalWindow.svelte';
 	import ErrorDialog from '$lib/components/ErrorDialog.svelte';
-	import { openWindows, addWindow } from '$lib/state/store';
+	import { openWindows, addWindow, restoreSession } from '$lib/state/store';
+	import { onMount } from 'svelte';
 
 	let leftPercent = $state(20);
 
 	let windows = $state([]);
+
+	onMount(() => {
+		restoreSession();
+	});
 
 	$effect(() => {
 		const unsub = openWindows.subscribe((val) => {

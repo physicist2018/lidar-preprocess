@@ -1,14 +1,11 @@
 import { writable, get } from 'svelte/store';
 import { newLicelPackFromZipBuffer } from 'licelfile-js';
+import { saveSession, loadSession } from './persistence';
 
 // --- File store ---
-export const files = writable([
-	{ id: 1, name: 'scan_001.las', size: '24.5 MB', selected: false },
-	{ id: 2, name: 'scan_002.las', size: '31.2 MB', selected: false },
-	{ id: 3, name: 'scan_003.las', size: '18.7 MB', selected: false },
-	{ id: 4, name: 'scan_004.laz', size: '42.1 MB', selected: false },
-	{ id: 5, name: 'scan_005.laz', size: '55.3 MB', selected: false }
-]);
+export const files = writable(
+	/** @type {Array<{ id: number, name: string, size: string, selected: boolean }>} */ ([])
+);
 
 export const openWindows = writable(
 	/** @type {Array<{ id: number, title: string, x: number, y: number, payload?: any }>} */ ([])
@@ -27,8 +24,8 @@ export function clearError() {
 }
 
 // --- Loaded Licel data ---
-// Map file id -> parsed LicelFile (from the last successfully opened zip)
-export const licelFiles = writable(new Map());
+// Map file id -> parsed/modified LicelFile of the current working dataset
+export const licelFiles = writable(/** @type {Map<number, any>} */ (new Map()));
 
 // --- Background removal state ---
 export const backgroundRemoval = writable(
@@ -38,104 +35,6 @@ export const backgroundRemoval = writable(
 		referenceFile: null
 	})
 );
-
-// --- Mock profile data for graph windows ---
-const channelColors = [
-	'#3b82f6', // blue
-	'#10b981', // green
-	'#ef4444', // red
-	'#f59e0b', // amber
-	'#8b5cf6', // violet
-	'#ec4899', // pink
-	'#06b6d4', // cyan
-	'#84cc16' // lime
-];
-
-/**
- * @param {number} count
- * @param {number} baseSignal
- * @param {number} noise
- * @returns {Array<{ x: number, y: number }>}
- */
-function generateProfile(count, baseSignal, noise) {
-	const points = [];
-	for (let i = 0; i < count; i++) {
-		const height = (i / count) * 17000;
-		const signal = baseSignal + Math.sin(height * 0.001) * 30 + (Math.random() - 0.5) * noise;
-		points.push({ x: height, y: Math.max(0, signal) });
-	}
-	return points;
-}
-
-/** @type {Record<number, Array<{ name: string, color: string, points: Array<{ x: number, y: number }> }>>} */
-export const fileProfiles = {
-	1: [
-		{ name: 'Backscatter — Main', color: channelColors[0], points: generateProfile(17000, 80, 20) },
-		{
-			name: 'Backscatter — Secondary',
-			color: channelColors[1],
-			points: generateProfile(17000, 40, 15)
-		},
-		{ name: 'Intensity', color: channelColors[2], points: generateProfile(17000, 60, 25) },
-		{ name: 'RGB', color: channelColors[3], points: generateProfile(17000, 50, 10) }
-	],
-	2: [
-		{ name: 'Backscatter — Main', color: channelColors[0], points: generateProfile(17000, 90, 18) },
-		{
-			name: 'Backscatter — Secondary',
-			color: channelColors[1],
-			points: generateProfile(17000, 35, 12)
-		},
-		{ name: 'Intensity', color: channelColors[2], points: generateProfile(17000, 70, 20) }
-	],
-	3: [
-		{ name: 'Backscatter — Main', color: channelColors[0], points: generateProfile(17000, 75, 22) },
-		{
-			name: 'Backscatter — Tertiary',
-			color: channelColors[4],
-			points: generateProfile(17000, 25, 8)
-		}
-	],
-	4: [
-		{ name: 'Backscatter — Main', color: channelColors[0], points: generateProfile(17000, 85, 16) },
-		{
-			name: 'Backscatter — Secondary',
-			color: channelColors[1],
-			points: generateProfile(17000, 45, 14)
-		},
-		{
-			name: 'Backscatter — Tertiary',
-			color: channelColors[4],
-			points: generateProfile(17000, 20, 10)
-		},
-		{ name: 'Intensity', color: channelColors[2], points: generateProfile(17000, 55, 22) }
-	],
-	5: [
-		{ name: 'Backscatter — Main', color: channelColors[0], points: generateProfile(17000, 95, 15) },
-		{
-			name: 'Backscatter — Secondary',
-			color: channelColors[1],
-			points: generateProfile(17000, 50, 18)
-		},
-		{ name: 'Intensity', color: channelColors[2], points: generateProfile(17000, 65, 20) },
-		{ name: 'RGB', color: channelColors[3], points: generateProfile(17000, 40, 8) }
-	]
-};
-
-// Map file names to profile IDs
-/** @type {Record<string, number>} */
-export const fileNameToId = {};
-/** @param {string} name @param {number} profileId */
-export function registerFile(name, profileId) {
-	fileNameToId[name] = profileId;
-}
-
-// Register default files
-registerFile('scan_001.las', 1);
-registerFile('scan_002.las', 2);
-registerFile('scan_003.las', 3);
-registerFile('scan_004.laz', 4);
-registerFile('scan_005.laz', 5);
 
 // --- Actions ---
 /** @param {boolean} selected */
@@ -150,9 +49,22 @@ export function toggleFile(id) {
 	files.set(current.map((f) => (f.id === id ? { ...f, selected: !f.selected } : f)));
 }
 
-export function deleteSelected() {
+export async function deleteSelected() {
 	const current = get(files);
+	const removed = current.filter((f) => f.selected);
+	if (removed.length === 0) return;
+	const removedIds = new Set(removed.map((f) => f.id));
+
 	files.set(current.filter((f) => !f.selected));
+
+	const data = get(licelFiles);
+	const nextData = new Map();
+	for (const [id, lf] of data) {
+		if (!removedIds.has(id)) nextData.set(id, lf);
+	}
+	licelFiles.set(nextData);
+
+	await persistSession();
 }
 
 /**
@@ -164,6 +76,8 @@ export function removeBackground(params) {
 		.filter((f) => f.selected)
 		.map((f) => f.id);
 	console.log('removeBackground', { selected, ...params });
+	// TODO: mutate profile data (background subtraction), then persist the new state:
+	// await persistSession();
 	// Reset state
 	backgroundRemoval.set({ method: 'average', height: '', referenceFile: null });
 }
@@ -178,7 +92,21 @@ export function mergeChannels() {
 	);
 }
 
-let nextId = 100;
+export function cropByHeight() {
+	// TODO: implement
+	console.log(
+		'cropByHeight',
+		get(files)
+			.filter((f) => f.selected)
+			.map((f) => f.id)
+	);
+	// TODO: after trimming profile data, persist the new state:
+	// await persistSession();
+}
+
+// --- Zip loading & session persistence ---
+
+let nextId = 1;
 
 /** @param {any} lf */
 function licelFileBytes(lf) {
@@ -204,18 +132,17 @@ function formatSize(bytes) {
 }
 
 /**
- * @param {ArrayBuffer} buffer
- * @param {string} zipName
+ * Parse a zip archive into the file list. Returns success. Shows errors in the dialog.
+ * @param {Uint8Array} bytes
+ * @param {string} label
+ * @returns {boolean}
  */
-export function openFiles(buffer, zipName) {
-	// newLicelPackFromZipBuffer is synchronous; parse errors must not break the UI.
+function loadPackFromZip(bytes, label) {
 	try {
-		const bytes = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : new Uint8Array(buffer);
 		const pack = newLicelPackFromZipBuffer(bytes);
-
 		if (!pack.data || pack.data.size === 0) {
-			showError(`В архиве "${zipName}" не найдено файлов данных Licel.`);
-			return;
+			showError(`В архиве "${label}" не найдено файлов данных Licel.`);
+			return false;
 		}
 
 		const items = [];
@@ -229,21 +156,96 @@ export function openFiles(buffer, zipName) {
 
 		files.set(items);
 		licelFiles.set(fileMap);
-		console.log('openFiles', { zipName, files: items });
+		console.log('openFiles', { zipName: label, files: items });
+		return true;
 	} catch (err) {
 		const detail = err instanceof Error ? err.message : String(err);
-		showError(`Не удалось прочитать архив "${zipName}": ${detail}`);
+		showError(`Не удалось прочитать архив "${label}": ${detail}`);
+		return false;
 	}
 }
 
-export function cropByHeight() {
-	// TODO: implement
-	console.log(
-		'cropByHeight',
-		get(files)
-			.filter((f) => f.selected)
-			.map((f) => f.id)
-	);
+/**
+ * Open a zip from the file picker and persist the resulting dataset.
+ * @param {ArrayBuffer} buffer
+ * @param {string} zipName
+ * @returns {Promise<boolean>}
+ */
+export async function openFiles(buffer, zipName) {
+	const ok = loadPackFromZip(new Uint8Array(buffer), zipName);
+	if (ok) await persistSession();
+	return ok;
+}
+
+/**
+ * Save the current working dataset (files + parsed LicelFile data) to IndexedDB.
+ * Called after loading a zip and after every operation that changes the data.
+ */
+export async function persistSession() {
+	const current = get(files);
+	const data = get(licelFiles);
+
+	/** @type {Array<{ id: number, name: string, size: string, selected: boolean, lf: any }>} */
+	const rows = [];
+	for (const f of current) {
+		const lf = data.get(f.id);
+		if (!lf) continue;
+		rows.push({
+			id: f.id,
+			name: f.name,
+			size: formatSize(licelFileBytes(lf)),
+			selected: false,
+			lf
+		});
+	}
+
+	try {
+		await saveSession({ version: 1, rows });
+	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
+		showError(`Не удалось сохранить данные в браузере: ${detail}`);
+	}
+}
+
+let restoreStarted = false;
+
+/**
+ * Restore the previously persisted dataset on application start (client only).
+ */
+export async function restoreSession() {
+	if (restoreStarted) return;
+	restoreStarted = true;
+
+	/** @type {any} */
+	let snapshot = null;
+	try {
+		snapshot = await loadSession();
+	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
+		console.error('restoreSession: failed to load', detail);
+		return;
+	}
+	if (!snapshot || !Array.isArray(snapshot.rows)) return;
+
+	const items = [];
+	const fileMap = new Map();
+	let maxId = 0;
+	for (const item of snapshot.rows) {
+		if (!item || typeof item.name !== 'string' || !item.lf) continue;
+		const id = Number.isFinite(item.id) ? item.id : nextId++;
+		items.push({
+			id,
+			name: item.name,
+			size: typeof item.size === 'string' ? item.size : '—',
+			selected: false
+		});
+		fileMap.set(id, item.lf);
+		maxId = Math.max(maxId, id);
+	}
+
+	nextId = maxId + 1;
+	files.set(items);
+	licelFiles.set(fileMap);
 }
 
 // --- NonModalWindow actions ---

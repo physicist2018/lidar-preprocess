@@ -13,19 +13,30 @@
 </script>
 
 <div class="flex flex-col gap-1 p-2">
-	{#each fileItems as file (file.id)}
-		<div class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-100 cursor-pointer select-none group">
-			<input
-				type="checkbox"
-				checked={file.selected}
-				onchange={() => toggleFile(file.id)}
-				class="accent-blue-600"
-			/>
-			<span
-				class="text-sm truncate flex-1 cursor-pointer group-hover:text-blue-600"
-				ondblclick={(e) => { e.stopPropagation(); onDoubleClick?.(file); }}
-			>{file.name}</span>
-			<span class="text-xs text-gray-400 shrink-0">{file.size}</span>
+	{#if fileItems.length === 0}
+		<div class="px-2 py-6 text-center text-xs text-gray-400">
+			Файлы не загружены.<br />Откройте ZIP-архив через «Открыть файлы».
 		</div>
-	{/each}
+	{:else}
+		{#each fileItems as file (file.id)}
+			<div
+				class="group flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 select-none hover:bg-gray-100"
+			>
+				<input
+					type="checkbox"
+					checked={file.selected}
+					onchange={() => toggleFile(file.id)}
+					class="accent-blue-600"
+				/>
+				<span
+					class="flex-1 cursor-pointer truncate text-sm group-hover:text-blue-600"
+					ondblclick={(e) => {
+						e.stopPropagation();
+						onDoubleClick?.(file);
+					}}>{file.name}</span
+				>
+				<span class="shrink-0 text-xs text-gray-400">{file.size}</span>
+			</div>
+		{/each}
+	{/if}
 </div>
