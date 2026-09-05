@@ -1,3 +1,10 @@
+<script module>
+	let highestZ = 10;
+	export function getNextZIndex() {
+		return ++highestZ;
+	}
+</script>
+
 <script>
 	import {
 		removeWindow,
@@ -228,11 +235,6 @@
 
 	function handleClose() {
 		removeWindow(id);
-	}
-
-	let highestZ = 10;
-	function getNextZIndex() {
-		return ++highestZ;
 	}
 
 	function handleFileChange(e) {
