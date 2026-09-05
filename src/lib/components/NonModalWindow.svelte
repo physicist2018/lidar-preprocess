@@ -13,6 +13,8 @@
 		medianFilter,
 		medianFiltering,
 		MEDIAN_WINDOW_MAX,
+		cropByHeightConfig,
+		cropByHeight,
 		licelFiles,
 		savedChannelSelection,
 		rememberChannelSelection
@@ -108,6 +110,15 @@
 	$effect(() => {
 		const unsub = medianFilter.subscribe((val) => {
 			medianWindowSize = val.windowSize;
+		});
+		return unsub;
+	});
+
+	let cropMaxHeight = $state('');
+
+	$effect(() => {
+		const unsub = cropByHeightConfig.subscribe((val) => {
+			cropMaxHeight = val.maxHeight;
 		});
 		return unsub;
 	});
@@ -357,6 +368,23 @@
 		if (size == null) return;
 		medianFiltering(size);
 	}
+
+	/** @returns {number | null} */
+	function parseCropMaxHeight() {
+		const value = Number(cropMaxHeight);
+		if (!Number.isFinite(value) || value <= 0) return null;
+		return value;
+	}
+
+	function isCropMaxHeightEmpty() {
+		return cropMaxHeight === '' || cropMaxHeight == null;
+	}
+
+	async function handleCropApply() {
+		const maxHeight = parseCropMaxHeight();
+		if (maxHeight == null) return;
+		await cropByHeight(maxHeight);
+	}
 </script>
 
 <div
@@ -534,26 +562,30 @@
 					<p class="mt-2 text-xs text-gray-400">Объединение выбранных файлов</p>
 				</div>
 			{:else if title === 'Обрезка по высоте'}
-				<div class="text-sm text-gray-600">
-					<p>Обрезка по высоте...</p>
-					<div class="mt-3 space-y-2">
-						<label class="block">
-							<span class="text-xs text-gray-500">Минимальная высота</span>
-							<input
-								type="number"
-								class="mt-1 w-full rounded border px-2 py-1 text-sm"
-								placeholder="0"
-							/>
-						</label>
-						<label class="block">
-							<span class="text-xs text-gray-500">Максимальная высота</span>
-							<input
-								type="number"
-								class="mt-1 w-full rounded border px-2 py-1 text-sm"
-								placeholder="1000"
-							/>
-						</label>
+				<div class="space-y-3">
+					<div>
+						<label class="mb-1 block text-xs text-gray-500">Максимальная высота, м</label>
+						<input
+							type="number"
+							bind:value={cropMaxHeight}
+							min="0"
+							placeholder="7500"
+							class="w-full rounded border px-2 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+						/>
+						{#if !isCropMaxHeightEmpty() && parseCropMaxHeight() == null}
+							<p class="mt-1 text-xs text-red-600">Введите положительное число</p>
+						{/if}
 					</div>
+					<button
+						onclick={handleCropApply}
+						disabled={parseCropMaxHeight() == null}
+						class="w-full rounded py-1.5 text-sm font-medium transition-colors {parseCropMaxHeight() ==
+						null
+							? 'cursor-not-allowed bg-gray-200 text-gray-400'
+							: 'bg-blue-600 text-white hover:bg-blue-700'}"
+					>
+						Применить
+					</button>
 				</div>
 			{:else if title === 'Медианная фильтрация'}
 				<div class="space-y-3">

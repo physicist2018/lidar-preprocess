@@ -1,5 +1,5 @@
 import { writable, get } from 'svelte/store';
-import { newLicelPackFromZipBuffer } from 'licelfile-js';
+import { newLicelPackFromZipBuffer, savePackToZipBuffer } from 'licelfile-js';
 import { saveSession, loadSession } from './persistence';
 
 // --- File store ---
@@ -42,6 +42,13 @@ export const MEDIAN_WINDOW_MAX = 101;
 export const medianFilter = writable(
 	/** @type {{ windowSize: string }} */ ({
 		windowSize: ''
+	})
+);
+
+// --- Height crop state ---
+export const cropByHeightConfig = writable(
+	/** @type {{ maxHeight: string }} */ ({
+		maxHeight: ''
 	})
 );
 
@@ -170,16 +177,118 @@ export function mergeChannels() {
 	);
 }
 
-export function cropByHeight() {
-	// TODO: implement
-	console.log(
-		'cropByHeight',
-		get(files)
-			.filter((f) => f.selected)
-			.map((f) => f.id)
+/**
+ * Trim every channel of every selected file to the given maximum height (meters).
+ * A profile whose length is already within the limit (or shorter than one bin)
+ * is left untouched. Profiles are trimmed per their own bin width, so the same
+ * distance may yield a different number of retained points per channel.
+ * @param {number} maxHeight
+ */
+export async function cropByHeight(maxHeight) {
+	const selected = get(files)
+		.filter((f) => f.selected)
+		.map((f) => f.id);
+	if (selected.length === 0) {
+		showError('Не выделено ни одного файла.');
+		return;
+	}
+	if (!Number.isFinite(maxHeight) || maxHeight <= 0) {
+		showError('Укажите корректную максимальную высоту.');
+		return;
+	}
+
+	const data = get(licelFiles);
+	for (const id of selected) {
+		const lf = data.get(id);
+		if (!lf) continue;
+		for (const p of lf.profiles ?? []) {
+			if (!(p.binWidth > 0) || !p.data || p.data.length === 0) continue;
+			const total = Number.isFinite(p.nDataPoints) ? p.nDataPoints : p.data.length;
+			const keep = Math.min(Math.floor(maxHeight / p.binWidth), total);
+			if (keep >= total || keep < 1) continue;
+			p.data = p.data.slice(0, keep);
+			p.nDataPoints = p.data.length;
+		}
+	}
+	licelFiles.set(new Map(data));
+	refreshFileSizes(selected);
+
+	cropByHeightConfig.set({ maxHeight: '' });
+	console.log('cropByHeight', { selected, maxHeight });
+	await persistSession();
+}
+
+/**
+ * Recompute the displayed size of the given files after a data-modifying operation.
+ * @param {number[]} [ids] File ids to refresh; defaults to every file.
+ */
+function refreshFileSizes(ids) {
+	const current = get(files);
+	const data = get(licelFiles);
+	const idSet = ids ? new Set(ids) : null;
+	files.set(
+		current.map((f) => {
+			if (idSet && !idSet.has(f.id)) return f;
+			const lf = data.get(f.id);
+			if (!lf) return f;
+			return { ...f, size: formatSize(licelFileBytes(lf)) };
+		})
 	);
-	// TODO: after trimming profile data, persist the new state:
-	// await persistSession();
+}
+
+/** @param {string} name */
+function basename(name) {
+	const idx = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
+	return idx >= 0 ? name.slice(idx + 1) : name;
+}
+
+/**
+ * Serialize the selected files into an in-memory zip archive.
+ * Returns the zip bytes, or null after showing an error.
+ * @returns {Uint8Array | null}
+ */
+export function savePackToZip() {
+	const selected = get(files).filter((f) => f.selected);
+	if (selected.length === 0) {
+		showError('Не выделено ни одного файла.');
+		return null;
+	}
+
+	const data = get(licelFiles);
+	/** @type {Map<string, any>} */
+	const packData = new Map();
+	for (const f of selected) {
+		const lf = data.get(f.id);
+		if (!lf) continue;
+		const entry = basename(f.name);
+		if (packData.has(entry)) {
+			showError(`В архиве несколько файлов с именем "${entry}". Переименуйте их и повторите.`);
+			return null;
+		}
+		packData.set(entry, lf);
+	}
+
+	if (packData.size === 0) {
+		showError('Нет данных для сохранения.');
+		return null;
+	}
+
+	try {
+		/** @type {import('licelfile-js').LicelPack} */
+		const pack = {
+			data: packData,
+			startTime: new Date(0),
+			stopTime: new Date(0),
+			zipCompressionLevel: 0
+		};
+		const bytes = savePackToZipBuffer(pack);
+		console.log('savePackToZip', { files: [...packData.keys()] });
+		return bytes;
+	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
+		showError(`Не удалось сохранить архив: ${detail}`);
+		return null;
+	}
 }
 
 // --- Zip loading & session persistence ---

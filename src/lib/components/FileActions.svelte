@@ -6,7 +6,7 @@
 		removeBackground,
 		mergeChannels,
 		openFiles,
-		cropByHeight,
+		savePackToZip,
 		addWindow,
 		showError
 	} from '$lib/state/store';
@@ -69,8 +69,29 @@
 	}
 
 	function handleCropByHeight() {
-		cropByHeight();
 		addWindow('Обрезка по высоте');
+	}
+
+	function handleSaveZip() {
+		const bytes = savePackToZip();
+		if (!bytes) return;
+
+		const now = new Date();
+		const pad2 = (/** @type {number} */ n) => String(n).padStart(2, '0');
+		const stamp = `${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}_${pad2(
+			now.getHours()
+		)}${pad2(now.getMinutes())}${pad2(now.getSeconds())}`;
+
+		const url = URL.createObjectURL(
+			new Blob([/** @type {any} */ (bytes)], { type: 'application/zip' })
+		);
+		const link = document.createElement('a');
+		link.href = url;
+		link.download = `lidar_${stamp}.zip`;
+		document.body.appendChild(link);
+		link.click();
+		link.remove();
+		URL.revokeObjectURL(url);
 	}
 </script>
 
@@ -132,5 +153,11 @@
 		class="w-full rounded bg-blue-50 px-2.5 py-1.5 text-left text-xs text-blue-700 transition-colors hover:bg-blue-100"
 	>
 		Открыть файлы
+	</button>
+	<button
+		onclick={handleSaveZip}
+		class="w-full rounded bg-blue-50 px-2.5 py-1.5 text-left text-xs text-blue-700 transition-colors hover:bg-blue-100"
+	>
+		Сохранить в ZIP
 	</button>
 </div>
