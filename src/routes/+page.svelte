@@ -22,6 +22,10 @@
 	function handleAddDemoWindow() {
 		addWindow('Демонстрационное окно');
 	}
+
+	function handleFileDoubleClick(file) {
+		addWindow(`График: ${file.name}`);
+	}
 </script>
 
 <div class="h-screen w-screen flex flex-col overflow-hidden bg-gray-50">
@@ -49,7 +53,7 @@
 				<h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Файлы</h2>
 			</div>
 			<div class="flex-1 overflow-auto">
-				<FileList />
+				<FileList onDoubleClick={handleFileDoubleClick} />
 			</div>
 			<div class="border-t border-gray-200">
 				<FileActions />

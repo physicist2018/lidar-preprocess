@@ -2,6 +2,7 @@
 	import { files, toggleSelectAll, deleteSelected, removeBackground, mergeChannels, openFiles, cropByHeight, addWindow } from '$lib/state/store';
 
 	let fileItems = $state([]);
+	let fileInput = $state(null);
 
 	$effect(() => {
 		const unsub = files.subscribe((val) => {
@@ -34,7 +35,21 @@
 	}
 
 	function handleOpenFiles() {
-		openFiles();
+		fileInput?.click();
+	}
+
+	function handleFileSelect(e) {
+		const file = e.target.files?.[0];
+		if (!file) return;
+
+		const reader = new FileReader();
+		reader.onload = () => {
+			const buffer = reader.result;
+			openFiles(buffer, file.name);
+		};
+		reader.readAsArrayBuffer(file);
+		// Reset input so same file can be selected again
+		e.target.value = '';
 	}
 
 	function handleCropByHeight() {
@@ -44,6 +59,14 @@
 </script>
 
 <div class="p-2 flex flex-col gap-1.5">
+	<!-- Hidden file input -->
+	<input
+		bind:this={fileInput}
+		type="file"
+		accept=".zip"
+		class="hidden"
+		onchange={handleFileSelect}
+	/>
 	<button
 		onclick={handleSelectAll}
 		class="w-full text-left text-xs px-2.5 py-1.5 rounded bg-gray-100 hover:bg-gray-200 transition-colors"

@@ -1,13 +1,36 @@
 <script>
-	import { removeWindow, backgroundRemoval, removeBackground } from '$lib/state/store';
+	import {
+		removeWindow,
+		backgroundRemoval,
+		removeBackground,
+		fileProfiles,
+		fileNameToId
+	} from '$lib/state/store';
+	import { onMount, onDestroy } from 'svelte';
 
 	let { id, x, y, title } = $props();
-	let windowRef = $state(null);
+	let windowRef = $state(/** @type {HTMLDivElement | null} */ (null));
 	let isDragging = $state(false);
 	let dragOffset = { x: 0, y: 0 };
 	let zIndex = $state(10);
+	let chartRef = $state(/** @type {HTMLDivElement | null} */ (null));
+	let plotlyInstance = $state(/** @type {any} */ (null));
+	let PlotlyLib = /** @type {any} */ (null);
+	let isResizing = $state(false);
+	let resizeStart = { x: 0, y: 0, w: 0, h: 0 };
+	let windowWidth = $state(title.startsWith('График: ') ? 640 : 360);
+	let windowHeight = $state(/** @type {number | null} */ (null)); // null = auto, explicit px after manual resize
 
 	let config = $state({ method: 'average', height: '', referenceFile: null, referenceName: '' });
+	let channelStates = $state({}); // { channelName: boolean }
+	let fileName = $state('');
+	let profileId = $state(1);
+
+	// Extract filename from title "График: filename"
+	if (title.startsWith('График: ')) {
+		fileName = title.slice(8);
+		profileId = fileNameToId[fileName] || 1;
+	}
 
 	$effect(() => {
 		const unsub = backgroundRemoval.subscribe((val) => {
@@ -15,6 +38,141 @@
 		});
 		return unsub;
 	});
+
+	// Initialize channel states from profiles
+	$effect(() => {
+		if (!profileId) return;
+		const profiles = fileProfiles[profileId];
+		if (profiles) {
+			const states = {};
+			for (const ch of profiles) {
+				states[ch.name] = true;
+			}
+			channelStates = states;
+		}
+	});
+
+	onMount(() => {
+		if (!chartRef || !profileId) return;
+		initChart();
+	});
+
+	onDestroy(() => {
+		if (plotlyInstance && PlotlyLib) {
+			PlotlyLib.purge(chartRef);
+			plotlyInstance = null;
+		}
+	});
+
+	$effect(() => {
+		if (!chartRef || !plotlyInstance || !PlotlyLib) return;
+		if (typeof ResizeObserver === 'undefined' || typeof requestAnimationFrame === 'undefined')
+			return;
+		const el = chartRef;
+		let rafId = 0;
+		const observer = new ResizeObserver(() => {
+			if (rafId) return;
+			rafId = requestAnimationFrame(() => {
+				rafId = 0;
+				PlotlyLib.Plots.resize(el);
+			});
+		});
+		observer.observe(el);
+		return () => {
+			observer.disconnect();
+			if (rafId) cancelAnimationFrame(rafId);
+		};
+	});
+
+	function initChart() {
+		import('plotly.js-dist-min').then((Plotly) => {
+			PlotlyLib = Plotly;
+			const profiles = fileProfiles[profileId];
+			if (!profiles) return;
+
+			const traces = profiles
+				.filter((ch) => channelStates[ch.name])
+				.map((ch) => ({
+					x: ch.points.map((p) => p.x),
+					y: ch.points.map((p) => p.y),
+					name: ch.name,
+					mode: 'lines',
+					line: { color: ch.color, width: 1.5 },
+					connectgaps: false
+				}));
+
+			const layout = {
+				xaxis: { title: 'Высота (м)', range: [0, 17000], zeroline: false },
+				yaxis: { title: 'Сигнал', zeroline: false },
+				hovermode: 'closest',
+				showlegend: true,
+				margin: { l: 50, r: 20, t: 20, b: 50 },
+				paper_bgcolor: 'white',
+				plot_bgcolor: 'white'
+			};
+
+			const configPlotly = {
+				responsive: true,
+				displayModeBar: true,
+				modeBarButtonsToRemove: ['lasso2d', 'select2d']
+			};
+
+			Plotly.newPlot(chartRef, traces, layout, configPlotly).then((instance) => {
+				plotlyInstance = instance;
+			});
+		});
+	}
+
+	function updateChart() {
+		if (!PlotlyLib || !plotlyInstance || !chartRef) return;
+		const profiles = fileProfiles[profileId];
+		if (!profiles) return;
+
+		const traces = profiles
+			.filter((ch) => channelStates[ch.name])
+			.map((ch) => ({
+				x: ch.points.map((p) => p.x),
+				y: ch.points.map((p) => p.y),
+				name: ch.name,
+				mode: 'lines',
+				line: { color: ch.color, width: 1.5 },
+				connectgaps: false
+			}));
+
+		PlotlyLib.react(chartRef, traces, plotlyInstance.layout);
+	}
+
+	function handleChannelToggle(name) {
+		channelStates = { ...channelStates, [name]: !channelStates[name] };
+		updateChart();
+	}
+
+	/** @param {MouseEvent} e */
+	function handleResizeStart(e) {
+		if (e.button !== 0 || !windowRef) return;
+		const rect = windowRef.getBoundingClientRect();
+		resizeStart = { x: e.clientX, y: e.clientY, w: rect.width, h: rect.height };
+		isResizing = true;
+		zIndex = getNextZIndex();
+		e.preventDefault();
+		e.stopPropagation();
+
+		/** @param {MouseEvent} e2 */
+		function handleMove(e2) {
+			if (!isResizing) return;
+			windowWidth = Math.max(400, resizeStart.w + (e2.clientX - resizeStart.x));
+			windowHeight = Math.max(445, resizeStart.h + (e2.clientY - resizeStart.y));
+		}
+
+		function handleUp() {
+			isResizing = false;
+			document.removeEventListener('mousemove', handleMove);
+			document.removeEventListener('mouseup', handleUp);
+		}
+
+		document.addEventListener('mousemove', handleMove);
+		document.addEventListener('mouseup', handleUp);
+	}
 
 	function handleMouseDown(e) {
 		if (e.target.closest('.no-drag')) return;
@@ -64,7 +222,7 @@
 		removeBackground({
 			method: config.method,
 			height: config.method === 'reference' ? null : Number(config.height),
-			referenceFile: config.method === 'reference' ? config.referenceFile : null,
+			referenceFile: config.method === 'reference' ? config.referenceFile : null
 		});
 	}
 
@@ -79,112 +237,221 @@
 <div
 	bind:this={windowRef}
 	tabindex="-1"
-	class="absolute bg-white rounded-lg shadow-xl border border-gray-200 flex flex-col overflow-hidden"
-	style="left: {x}px; top: {y}px; width: 360px; min-height: 200px; z-index: {zIndex}"
-	onmousedown={() => { zIndex = getNextZIndex(); }}
+	class="absolute flex flex-col overflow-hidden rounded-lg border border-gray-200 bg-white shadow-xl"
+	style="left: {x}px; top: {y}px; width: {windowWidth}px; min-width: 320px; height: {windowHeight
+		? windowHeight + 'px'
+		: 'auto'}; min-height: 200px; z-index: {zIndex}"
+	onmousedown={() => {
+		zIndex = getNextZIndex();
+	}}
 >
 	<div
 		role="presentation"
-		class="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-200 cursor-move select-none"
+		class="flex cursor-move items-center justify-between border-b border-gray-200 bg-gray-50 px-3 py-2 select-none"
 		onmousedown={handleMouseDown}
 	>
 		<span class="text-sm font-medium text-gray-700">{title}</span>
 		<button
 			onclick={handleClose}
 			aria-label="Закрыть"
-			class="no-drag w-6 h-6 flex items-center justify-center rounded hover:bg-gray-200 text-gray-500 hover:text-gray-800 transition-colors"
+			class="no-drag flex h-6 w-6 items-center justify-center rounded text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-800"
 		>
-			<svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+			<svg
+				xmlns="http://www.w3.org/2000/svg"
+				class="h-4 w-4"
+				fill="none"
+				viewBox="0 0 24 24"
+				stroke="currentColor"
+				stroke-width="2"
+			>
 				<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
 			</svg>
 		</button>
 	</div>
 
-	<div class="p-4 flex-1 overflow-auto">
-		{#if title === 'Удаление фона'}
-			<div class="space-y-3">
-				<!-- Method selection -->
-				<div class="space-y-2">
-					<label class="flex items-center gap-2 cursor-pointer">
-						<input type="radio" name="bgMethod" checked={config.method === 'average'} onchange={() => config.method = 'average'} class="accent-blue-600" />
-						<span class="text-sm text-gray-700">Среднее арифметическое</span>
-					</label>
-					<label class="flex items-center gap-2 cursor-pointer">
-						<input type="radio" name="bgMethod" checked={config.method === 'median'} onchange={() => config.method = 'median'} class="accent-blue-600" />
-						<span class="text-sm text-gray-700">Медиана</span>
-					</label>
-					<label class="flex items-center gap-2 cursor-pointer">
-						<input type="radio" name="bgMethod" checked={config.method === 'reference'} onchange={() => config.method = 'reference'} class="accent-blue-600" />
-						<span class="text-sm text-gray-700">Референсный файл</span>
-					</label>
+	<!-- Graph window -->
+	{#if title.startsWith('График: ')}
+		<div class="flex h-full" style="min-height: 400px;">
+			<!-- Left panel: channel list -->
+			<div class="flex w-56 shrink-0 flex-col border-r border-gray-200">
+				<div class="border-b border-gray-200 px-3 py-2">
+					<h3 class="text-xs font-semibold tracking-wider text-gray-500 uppercase">Каналы</h3>
 				</div>
+				<div class="flex-1 space-y-1 overflow-auto p-2">
+					{#if fileName}
+						{#each Object.entries(channelStates) as [name, enabled]}
+							<label
+								class="flex cursor-pointer items-center gap-2 rounded px-1 py-1 hover:bg-gray-50"
+							>
+								<input
+									type="checkbox"
+									checked={enabled}
+									onchange={() => handleChannelToggle(name)}
+									class="accent-blue-600"
+								/>
+								<span class="truncate text-xs">{name}</span>
+							</label>
+						{/each}
+					{/if}
+				</div>
+				<div class="space-y-1 border-t border-gray-200 px-2 py-2">
+					<button
+						class="w-full rounded bg-gray-100 px-2 py-1.5 text-xs transition-colors hover:bg-gray-200"
+					>
+						Кнопка 1
+					</button>
+					<button
+						class="w-full rounded bg-gray-100 px-2 py-1.5 text-xs transition-colors hover:bg-gray-200"
+					>
+						Кнопка 2
+					</button>
+				</div>
+			</div>
 
-				<!-- Height input for average/median -->
-				{#if config.method === 'average' || config.method === 'median'}
-					<div>
-						<label class="block text-xs text-gray-500 mb-1">Высота начала</label>
-						<input
-							type="number"
-							bind:value={config.height}
-							min="0"
-							placeholder="0"
-							class="w-full text-sm border rounded px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-						/>
+			<!-- Right panel: chart -->
+			<div class="flex-1 p-2">
+				<div bind:this={chartRef} style="width: 100%; height: 100%; min-height: 300px;"></div>
+			</div>
+		</div>
+	{:else}
+		<div class="flex-1 overflow-auto p-4">
+			{#if title === 'Удаление фона'}
+				<div class="space-y-3">
+					<!-- Method selection -->
+					<div class="space-y-2">
+						<label class="flex cursor-pointer items-center gap-2">
+							<input
+								type="radio"
+								name="bgMethod"
+								checked={config.method === 'average'}
+								onchange={() => (config.method = 'average')}
+								class="accent-blue-600"
+							/>
+							<span class="text-sm text-gray-700">Среднее арифметическое</span>
+						</label>
+						<label class="flex cursor-pointer items-center gap-2">
+							<input
+								type="radio"
+								name="bgMethod"
+								checked={config.method === 'median'}
+								onchange={() => (config.method = 'median')}
+								class="accent-blue-600"
+							/>
+							<span class="text-sm text-gray-700">Медиана</span>
+						</label>
+						<label class="flex cursor-pointer items-center gap-2">
+							<input
+								type="radio"
+								name="bgMethod"
+								checked={config.method === 'reference'}
+								onchange={() => (config.method = 'reference')}
+								class="accent-blue-600"
+							/>
+							<span class="text-sm text-gray-700">Референсный файл</span>
+						</label>
 					</div>
-				{/if}
 
-				<!-- Reference file input -->
-				{#if config.method === 'reference'}
-					<div>
-						<label class="block text-xs text-gray-500 mb-1">Референсный файл</label>
-						<input
-							type="file"
-							accept="*.*"
-							onchange={handleFileChange}
-							class="block w-full text-xs text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
-						/>
-						{#if config.referenceName}
-							<p class="mt-1 text-xs text-gray-600 truncate">{config.referenceName}</p>
-						{/if}
+					<!-- Height input for average/median -->
+					{#if config.method === 'average' || config.method === 'median'}
+						<div>
+							<label class="mb-1 block text-xs text-gray-500">Высота начала</label>
+							<input
+								type="number"
+								bind:value={config.height}
+								min="0"
+								placeholder="80000"
+								class="w-full rounded border px-2 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+							/>
+						</div>
+					{/if}
+
+					<!-- Reference file input -->
+					{#if config.method === 'reference'}
+						<div>
+							<label class="mb-1 block text-xs text-gray-500">Референсный файл</label>
+							<input
+								type="file"
+								accept="*.*"
+								onchange={handleFileChange}
+								class="block w-full cursor-pointer text-xs text-gray-500 file:mr-3 file:rounded file:border-0 file:bg-blue-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-blue-700 hover:file:bg-blue-100"
+							/>
+							{#if config.referenceName}
+								<p class="mt-1 truncate text-xs text-gray-600">{config.referenceName}</p>
+							{/if}
+						</div>
+					{/if}
+
+					<!-- Apply button -->
+					<button
+						onclick={handleApply}
+						disabled={isApplyDisabled()}
+						class="w-full rounded py-1.5 text-sm font-medium transition-colors {isApplyDisabled()
+							? 'cursor-not-allowed bg-gray-200 text-gray-400'
+							: 'bg-blue-600 text-white hover:bg-blue-700'}"
+					>
+						Применить
+					</button>
+				</div>
+			{:else if title === 'Склейка каналов'}
+				<div class="text-sm text-gray-600">
+					<p>Склейка каналов...</p>
+					<div class="mt-3 h-2 overflow-hidden rounded bg-gray-100">
+						<div class="h-full rounded bg-green-500" style="width: 40%"></div>
 					</div>
-				{/if}
+					<p class="mt-2 text-xs text-gray-400">Объединение выбранных файлов</p>
+				</div>
+			{:else if title === 'Обрезка по высоте'}
+				<div class="text-sm text-gray-600">
+					<p>Обрезка по высоте...</p>
+					<div class="mt-3 space-y-2">
+						<label class="block">
+							<span class="text-xs text-gray-500">Минимальная высота</span>
+							<input
+								type="number"
+								class="mt-1 w-full rounded border px-2 py-1 text-sm"
+								placeholder="0"
+							/>
+						</label>
+						<label class="block">
+							<span class="text-xs text-gray-500">Максимальная высота</span>
+							<input
+								type="number"
+								class="mt-1 w-full rounded border px-2 py-1 text-sm"
+								placeholder="1000"
+							/>
+						</label>
+					</div>
+				</div>
+			{:else}
+				<div class="text-sm text-gray-600">
+					<p>Окно: {title}</p>
+					<p class="mt-2 text-xs text-gray-400">Перетащите за заголовок для перемещения.</p>
+				</div>
+			{/if}
+		</div>
+	{/if}
 
-				<!-- Apply button -->
-				<button
-					onclick={handleApply}
-					disabled={isApplyDisabled()}
-					class="w-full py-1.5 rounded text-sm font-medium transition-colors {isApplyDisabled() ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}"
-				>
-					Применить
-				</button>
-			</div>
-		{:else if title === 'Склейка каналов'}
-			<div class="text-gray-600 text-sm">
-				<p>Склейка каналов...</p>
-				<div class="mt-3 h-2 bg-gray-100 rounded overflow-hidden">
-					<div class="h-full bg-green-500 rounded" style="width: 40%"></div>
-				</div>
-				<p class="mt-2 text-xs text-gray-400">Объединение выбранных файлов</p>
-			</div>
-		{:else if title === 'Обрезка по высоте'}
-			<div class="text-gray-600 text-sm">
-				<p>Обрезка по высоте...</p>
-				<div class="mt-3 space-y-2">
-					<label class="block">
-						<span class="text-xs text-gray-500">Минимальная высота</span>
-						<input type="number" class="mt-1 w-full text-sm border rounded px-2 py-1" placeholder="0" />
-					</label>
-					<label class="block">
-						<span class="text-xs text-gray-500">Максимальная высота</span>
-						<input type="number" class="mt-1 w-full text-sm border rounded px-2 py-1" placeholder="1000" />
-					</label>
-				</div>
-			</div>
-		{:else}
-			<div class="text-gray-600 text-sm">
-				<p>Окно: {title}</p>
-				<p class="mt-2 text-xs text-gray-400">Перетащите за заголовок для перемещения.</p>
-			</div>
-		{/if}
-	</div>
+	{#if title.startsWith('График: ')}
+		<button
+			onmousedown={handleResizeStart}
+			aria-label="Изменить размер окна"
+			class="no-drag absolute right-1 bottom-1 flex h-4 w-4 cursor-nwse-resize items-end justify-end text-gray-400 transition-colors select-none hover:text-blue-600"
+			style="touch-action: none;"
+		>
+			<svg
+				xmlns="http://www.w3.org/2000/svg"
+				width="10"
+				height="10"
+				viewBox="0 0 10 10"
+				fill="none"
+			>
+				<path
+					d="M0 10 L10 0 M0 6 L6 0 M4 10 L10 4"
+					stroke="currentColor"
+					stroke-width="1.2"
+					stroke-linecap="round"
+				/>
+			</svg>
+		</button>
+	{/if}
 </div>
