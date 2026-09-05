@@ -9,6 +9,8 @@
 	import { onMount, onDestroy } from 'svelte';
 
 	let { id, x, y, title } = $props();
+	let posX = $state(x);
+	let posY = $state(y);
 	let windowRef = $state(/** @type {HTMLDivElement | null} */ (null));
 	let isDragging = $state(false);
 	let dragOffset = { x: 0, y: 0 };
@@ -102,11 +104,23 @@
 				}));
 
 			const layout = {
-				xaxis: { title: 'Высота (м)', range: [0, 17000], zeroline: false },
-				yaxis: { title: 'Сигнал', zeroline: false },
+				xaxis: {
+					title: { text: 'Дистанция, м' },
+					range: [0, 17000],
+					zeroline: false,
+					automargin: true
+				},
+				yaxis: { title: { text: 'Сигнал' }, zeroline: false, automargin: true },
 				hovermode: 'closest',
 				showlegend: true,
-				margin: { l: 50, r: 20, t: 20, b: 50 },
+				legend: {
+					orientation: 'h',
+					x: 0.5,
+					xanchor: 'center',
+					y: 1.15,
+					yanchor: 'bottom'
+				},
+				margin: { l: 70, r: 30, t: 70, b: 70 },
 				paper_bgcolor: 'white',
 				plot_bgcolor: 'white'
 			};
@@ -174,21 +188,32 @@
 		document.addEventListener('mouseup', handleUp);
 	}
 
+	/** @param {MouseEvent} e */
 	function handleMouseDown(e) {
+		if (e.button !== 0) return;
 		if (e.target.closest('.no-drag')) return;
-		isDragging = true;
+		if (!windowRef) return;
+
 		const rect = windowRef.getBoundingClientRect();
-		dragOffset.x = e.clientX - rect.left;
-		dragOffset.y = e.clientY - rect.top;
+		const startClientX = e.clientX;
+		const startClientY = e.clientY;
+		const startX = posX;
+		const startY = posY;
+		dragOffset.x = startClientX - rect.left;
+		dragOffset.y = startClientY - rect.top;
+		isDragging = true;
 		zIndex = getNextZIndex();
 		e.preventDefault();
 
+		/** @param {MouseEvent} e2 */
 		function handleMove(e2) {
-			if (!isDragging || !windowRef) return;
-			const newX = e2.clientX - dragOffset.x;
-			const newY = e2.clientY - dragOffset.y;
-			windowRef.style.left = newX + 'px';
-			windowRef.style.top = newY + 'px';
+			if (!isDragging) return;
+			let newX = startX + (e2.clientX - startClientX);
+			let newY = startY + (e2.clientY - startClientY);
+			newX = Math.max(newX, -dragOffset.x);
+			newY = Math.max(newY, -dragOffset.y);
+			posX = newX;
+			posY = newY;
 		}
 
 		function handleUp() {
@@ -238,7 +263,7 @@
 	bind:this={windowRef}
 	tabindex="-1"
 	class="absolute flex flex-col overflow-hidden rounded-lg border border-gray-200 bg-white shadow-xl"
-	style="left: {x}px; top: {y}px; width: {windowWidth}px; min-width: 320px; height: {windowHeight
+	style="left: {posX}px; top: {posY}px; width: {windowWidth}px; min-width: 320px; height: {windowHeight
 		? windowHeight + 'px'
 		: 'auto'}; min-height: 200px; z-index: {zIndex}"
 	onmousedown={() => {
