@@ -36,6 +36,16 @@ export const backgroundRemoval = writable(
 	})
 );
 
+// --- Saved channel selection for graph windows ---
+// Snapshot of channel visibility (channel name -> enabled) remembered from a
+// graph window; applied to graph windows opened afterwards.
+export const savedChannelSelection = writable(/** @type {Record<string, boolean> | null} */ (null));
+
+/** @param {Record<string, boolean>} states */
+export function rememberChannelSelection(states) {
+	savedChannelSelection.set({ ...states });
+}
+
 // --- Actions ---
 /** @param {boolean} selected */
 export function toggleSelectAll(selected) {
@@ -156,6 +166,7 @@ function loadPackFromZip(bytes, label) {
 
 		files.set(items);
 		licelFiles.set(fileMap);
+		savedChannelSelection.set(null);
 		console.log('openFiles', { zipName: label, files: items });
 		return true;
 	} catch (err) {

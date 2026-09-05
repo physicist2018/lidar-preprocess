@@ -6,7 +6,14 @@
 </script>
 
 <script>
-	import { removeWindow, backgroundRemoval, removeBackground, licelFiles } from '$lib/state/store';
+	import {
+		removeWindow,
+		backgroundRemoval,
+		removeBackground,
+		licelFiles,
+		savedChannelSelection,
+		rememberChannelSelection
+	} from '$lib/state/store';
 	import { get } from 'svelte/store';
 	import { onMount, onDestroy } from 'svelte';
 
@@ -93,12 +100,14 @@
 		return unsub;
 	});
 
-	// Initialize channel states (all enabled by default) synchronously before mount
+	// Initialize channel states before mount: by default all enabled, but when a
+	// selection was remembered ("Кнопка 2") restore exactly those visible channels.
 	{
 		/** @type {Record<string, boolean>} */
 		const states = {};
+		const saved = get(savedChannelSelection);
 		for (const ch of channels) {
-			states[ch.name] = true;
+			states[ch.name] = saved ? (saved[ch.name] ?? false) : true;
 		}
 		channelStates = states;
 	}
@@ -209,6 +218,22 @@
 	function handleChannelToggle(name) {
 		channelStates = { ...channelStates, [name]: !channelStates[name] };
 		updateChart();
+	}
+
+	function handleToggleAllChannels() {
+		const values = Object.values(channelStates);
+		const allEnabled = values.length > 0 && values.every((v) => v);
+		/** @type {Record<string, boolean>} */
+		const next = {};
+		for (const name of Object.keys(channelStates)) {
+			next[name] = !allEnabled;
+		}
+		channelStates = next;
+		updateChart();
+	}
+
+	function handleRememberChannels() {
+		rememberChannelSelection(channelStates);
 	}
 
 	/** @param {MouseEvent} e */
@@ -366,14 +391,16 @@
 				</div>
 				<div class="space-y-1 border-t border-gray-200 px-2 py-2">
 					<button
+						onclick={handleToggleAllChannels}
 						class="w-full rounded bg-gray-100 px-2 py-1.5 text-xs transition-colors hover:bg-gray-200"
 					>
-						Кнопка 1
+						Вкл / Выкл все
 					</button>
 					<button
+						onclick={handleRememberChannels}
 						class="w-full rounded bg-gray-100 px-2 py-1.5 text-xs transition-colors hover:bg-gray-200"
 					>
-						Кнопка 2
+						Запомнить
 					</button>
 				</div>
 			</div>
