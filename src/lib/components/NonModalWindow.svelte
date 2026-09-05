@@ -67,6 +67,8 @@
 	let licel = null;
 	/** @type {Array<{ name: string, color: string, points: Array<{ x: number, y: number }> }>} */
 	let channels = [];
+	// Y axis scale of the graph window: 'linear' | 'log'
+	let yScale = $state('linear');
 
 	// Extract filename from title "График: filename" and resolve the data source
 	// from the current working dataset (licelFiles, keyed by file id via window payload).
@@ -221,7 +223,12 @@
 					zeroline: false,
 					automargin: true
 				},
-				yaxis: { title: { text: 'Сигнал' }, zeroline: false, automargin: true },
+				yaxis: {
+					title: { text: 'Сигнал' },
+					type: yScale,
+					zeroline: false,
+					automargin: true
+				},
 				hovermode: 'closest',
 				showlegend: true,
 				legend: {
@@ -287,6 +294,19 @@
 
 	function handleRememberChannels() {
 		rememberChannelSelection(channelStates);
+	}
+
+	function handleToggleYScale() {
+		const next = yScale === 'linear' ? 'log' : 'linear';
+		yScale = next;
+		if (!PlotlyLib || !plotlyInstance || !chartRef) return;
+		const layout = {
+			...plotlyInstance.layout,
+			yaxis: { ...plotlyInstance.layout.yaxis, type: next, autorange: true }
+		};
+		PlotlyLib.react(chartRef, buildTraces(), layout).then((/** @type {any} */ instance) => {
+			plotlyInstance = instance;
+		});
 	}
 
 	/** @param {MouseEvent} e */
@@ -507,6 +527,15 @@
 						class="w-full rounded bg-gray-100 px-2 py-1.5 text-xs transition-colors hover:bg-gray-200"
 					>
 						Запомнить
+					</button>
+					<button
+						onclick={handleToggleYScale}
+						class="w-full rounded px-2 py-1.5 text-xs font-medium transition-colors {yScale ===
+						'log'
+							? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+							: 'bg-gray-100 text-gray-700 hover:bg-gray-200'}"
+					>
+						{yScale === 'log' ? 'Лин. по Y' : 'Лог. по Y'}
 					</button>
 				</div>
 			</div>
