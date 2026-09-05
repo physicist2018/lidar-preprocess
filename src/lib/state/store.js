@@ -11,6 +11,13 @@ export const files = writable([
 
 export const openWindows = writable([]);
 
+// --- Background removal state ---
+export const backgroundRemoval = writable({
+	method: 'average', // 'average' | 'median' | 'reference'
+	height: '',
+	referenceFile: null,
+});
+
 // --- Actions ---
 export function toggleSelectAll(selected) {
 	const current = get(files);
@@ -27,9 +34,12 @@ export function deleteSelected() {
 	files.set(current.filter((f) => !f.selected));
 }
 
-export function removeBackground() {
-	// TODO: implement
-	console.log('removeBackground', get(files).filter((f) => f.selected).map((f) => f.id));
+export function removeBackground(params) {
+	// params: { method, height, referenceFile }
+	const selected = get(files).filter((f) => f.selected).map((f) => f.id);
+	console.log('removeBackground', { selected, ...params });
+	// Reset state
+	backgroundRemoval.set({ method: 'average', height: '', referenceFile: null });
 }
 
 export function mergeChannels() {

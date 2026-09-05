@@ -1,11 +1,20 @@
 <script>
-	import { removeWindow } from '$lib/state/store';
+	import { removeWindow, backgroundRemoval, removeBackground } from '$lib/state/store';
 
 	let { id, x, y, title } = $props();
 	let windowRef = $state(null);
 	let isDragging = $state(false);
 	let dragOffset = { x: 0, y: 0 };
 	let zIndex = $state(10);
+
+	let config = $state({ method: 'average', height: '', referenceFile: null, referenceName: '' });
+
+	$effect(() => {
+		const unsub = backgroundRemoval.subscribe((val) => {
+			config = { ...val, referenceName: val.referenceFile?.name || '' };
+		});
+		return unsub;
+	});
 
 	function handleMouseDown(e) {
 		if (e.target.closest('.no-drag')) return;
@@ -42,6 +51,29 @@
 	function getNextZIndex() {
 		return ++highestZ;
 	}
+
+	function handleFileChange(e) {
+		const file = e.target.files?.[0];
+		if (file) {
+			config.referenceFile = file;
+			config.referenceName = file.name;
+		}
+	}
+
+	function handleApply() {
+		removeBackground({
+			method: config.method,
+			height: config.method === 'reference' ? null : Number(config.height),
+			referenceFile: config.method === 'reference' ? config.referenceFile : null,
+		});
+	}
+
+	function isApplyDisabled() {
+		if (config.method === 'reference') {
+			return !config.referenceFile;
+		}
+		return !config.height || Number(config.height) < 0;
+	}
 </script>
 
 <div
@@ -70,12 +102,61 @@
 
 	<div class="p-4 flex-1 overflow-auto">
 		{#if title === 'Удаление фона'}
-			<div class="text-gray-600 text-sm">
-				<p>Удаление фона...</p>
-				<div class="mt-3 h-2 bg-gray-100 rounded overflow-hidden">
-					<div class="h-full bg-blue-500 rounded" style="width: 60%"></div>
+			<div class="space-y-3">
+				<!-- Method selection -->
+				<div class="space-y-2">
+					<label class="flex items-center gap-2 cursor-pointer">
+						<input type="radio" name="bgMethod" checked={config.method === 'average'} onchange={() => config.method = 'average'} class="accent-blue-600" />
+						<span class="text-sm text-gray-700">Среднее арифметическое</span>
+					</label>
+					<label class="flex items-center gap-2 cursor-pointer">
+						<input type="radio" name="bgMethod" checked={config.method === 'median'} onchange={() => config.method = 'median'} class="accent-blue-600" />
+						<span class="text-sm text-gray-700">Медиана</span>
+					</label>
+					<label class="flex items-center gap-2 cursor-pointer">
+						<input type="radio" name="bgMethod" checked={config.method === 'reference'} onchange={() => config.method = 'reference'} class="accent-blue-600" />
+						<span class="text-sm text-gray-700">Референсный файл</span>
+					</label>
 				</div>
-				<p class="mt-2 text-xs text-gray-400">Обработка выбранных файлов</p>
+
+				<!-- Height input for average/median -->
+				{#if config.method === 'average' || config.method === 'median'}
+					<div>
+						<label class="block text-xs text-gray-500 mb-1">Высота начала</label>
+						<input
+							type="number"
+							bind:value={config.height}
+							min="0"
+							placeholder="0"
+							class="w-full text-sm border rounded px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+						/>
+					</div>
+				{/if}
+
+				<!-- Reference file input -->
+				{#if config.method === 'reference'}
+					<div>
+						<label class="block text-xs text-gray-500 mb-1">Референсный файл</label>
+						<input
+							type="file"
+							accept="*.*"
+							onchange={handleFileChange}
+							class="block w-full text-xs text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
+						/>
+						{#if config.referenceName}
+							<p class="mt-1 text-xs text-gray-600 truncate">{config.referenceName}</p>
+						{/if}
+					</div>
+				{/if}
+
+				<!-- Apply button -->
+				<button
+					onclick={handleApply}
+					disabled={isApplyDisabled()}
+					class="w-full py-1.5 rounded text-sm font-medium transition-colors {isApplyDisabled() ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}"
+				>
+					Применить
+				</button>
 			</div>
 		{:else if title === 'Склейка каналов'}
 			<div class="text-gray-600 text-sm">
