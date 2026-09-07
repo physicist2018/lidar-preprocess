@@ -1,5 +1,5 @@
 <script module>
-	let highestZ = 10;
+	let highestZ = 100;
 	export function getNextZIndex() {
 		return ++highestZ;
 	}

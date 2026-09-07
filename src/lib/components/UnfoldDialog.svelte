@@ -40,7 +40,7 @@
 	}
 </script>
 
-<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+<div class="fixed inset-0 flex items-center justify-center bg-black/40 p-4" style="z-index: 10000">
 	<div
 		role="dialog"
 		aria-modal="true"
