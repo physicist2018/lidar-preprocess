@@ -7,11 +7,14 @@
 		openFiles,
 		savePackToZip,
 		addWindow,
+		addUnfoldWindow,
 		showError
 	} from '$lib/state/store';
+	import UnfoldDialog from './UnfoldDialog.svelte';
 
 	let fileItems = $state([]);
 	let fileInput = $state(null);
+	let unfoldDialogOpen = $state(false);
 
 	$effect(() => {
 		const unsub = files.subscribe((val) => {
@@ -68,6 +71,18 @@
 
 	function handleCropByHeight() {
 		addWindow('Обрезка по высоте');
+	}
+
+	function handleDrawUnfold() {
+		unfoldDialogOpen = true;
+	}
+
+	/**
+	 * @param {{ fileIds: number[], channelKey: string, transform: string }} cfg
+	 */
+	function handleUnfoldBuild(cfg) {
+		unfoldDialogOpen = false;
+		addUnfoldWindow(cfg);
 	}
 
 	function handleSaveZip() {
@@ -145,6 +160,12 @@
 	>
 		Обрезать по высоте
 	</button>
+	<button
+		onclick={handleDrawUnfold}
+		class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
+	>
+		Нарисовать развертку
+	</button>
 	<div class="my-1 border-t border-gray-200"></div>
 	<button
 		onclick={handleOpenFiles}
@@ -159,3 +180,10 @@
 		Сохранить в ZIP
 	</button>
 </div>
+
+{#if unfoldDialogOpen}
+	<UnfoldDialog
+		onClose={() => (unfoldDialogOpen = false)}
+		onBuild={(cfg) => handleUnfoldBuild(cfg)}
+	/>
+{/if}

@@ -31,6 +31,18 @@ export function clearError() {
 // Map file id -> parsed/modified LicelFile of the current working dataset
 export const licelFiles = writable(/** @type {Map<number, any>} */ (new Map()));
 
+// --- Data change notifications ---
+// File ids touched by the last licelFiles publish; null means every file may
+// have changed (new pack loaded / session restored). Published together with
+// the new licelFiles map so dependent windows can skip unaffected rebuilds.
+export const licelDataTouched = writable(/** @type {number[] | null} */ (null));
+
+/** @param {Map<number, any>} map @param {number[] | null} touchedIds */
+function publishLicelData(map, touchedIds) {
+	licelFiles.set(map);
+	licelDataTouched.set(touchedIds);
+}
+
 // --- Background removal state ---
 export const backgroundRemoval = writable(
 	/** @type {{ method: string, height: string, referenceFile: File | null }} */ ({
@@ -92,7 +104,7 @@ export async function deleteSelected() {
 	for (const [id, lf] of data) {
 		if (!removedIds.has(id)) nextData.set(id, lf);
 	}
-	licelFiles.set(nextData);
+	publishLicelData(nextData, [...removedIds]);
 
 	await persistSession();
 }
@@ -333,7 +345,7 @@ export async function removeBackground(params = {}) {
 	}
 	if (!ok) return;
 
-	licelFiles.set(new Map(data));
+	publishLicelData(new Map(data), selected);
 	refreshFileSizes(selected);
 
 	backgroundRemoval.set({ method: 'average', height: '', referenceFile: null });
@@ -393,7 +405,7 @@ export async function medianFiltering(windowSize) {
 			p.data = medianFilterValues(p.data, windowSize);
 		}
 	}
-	licelFiles.set(new Map(data));
+	publishLicelData(new Map(data), selected);
 
 	medianFilter.set({ windowSize: '' });
 	console.log('medianFiltering', { selected, windowSize });
@@ -443,12 +455,185 @@ export async function cropByHeight(maxHeight) {
 			p.nDataPoints = p.data.length;
 		}
 	}
-	licelFiles.set(new Map(data));
+	publishLicelData(new Map(data), selected);
 	refreshFileSizes(selected);
 
 	cropByHeightConfig.set({ maxHeight: '' });
 	console.log('cropByHeight', { selected, maxHeight });
 	await persistSession();
+}
+
+// --- Unfold (heatmap) support ---
+
+/** Value transforms available for unfold ("развертка") windows. */
+export const UNFOLD_TRANSFORMS = [
+	{ id: 'P', label: 'Исходный сигнал P', short: 'P' },
+	{ id: 'Pr2', label: 'P·r²', short: 'P·r²' },
+	{ id: 'logP', label: 'log₁₀(P)', short: 'log₁₀(P)' },
+	{ id: 'logPr2', label: 'log₁₀(P·r²)', short: 'log₁₀(P·r²)' }
+];
+
+// Maximum heatmap grid resolution. Larger inputs are uniformly decimated
+// (sampling every n-th bin / file) so matrix memory and rebuild cost stay
+// bounded regardless of the selected pack size.
+const UNFOLD_MAX_ROWS = 2500;
+const UNFOLD_MAX_COLS = 2500;
+
+/** @param {string} id */
+export function unfoldTransformById(id) {
+	return UNFOLD_TRANSFORMS.find((t) => t.id === id) ?? UNFOLD_TRANSFORMS[0];
+}
+
+/**
+ * List distinct channels present in the given files, each with the number of
+ * files that contain it. Labels and pairing follow the graph window convention.
+ * @param {number[]} fileIds
+ * @returns {Array<{ key: string, label: string, fileCount: number, wavelength: number, deviceID: string, polarization: string }>}
+ */
+export function listUnfoldChannels(fileIds) {
+	const data = get(licelFiles);
+	/** @type {Map<string, { key: string, label: string, fileCount: number, wavelength: number, deviceID: string, polarization: string }>} */
+	const found = new Map();
+	for (const id of fileIds) {
+		const lf = data.get(id);
+		if (!lf) continue;
+		for (const p of lf.profiles ?? []) {
+			if (p.active === false || !p.data || p.data.length === 0) continue;
+			const key = profileKey(p);
+			const entry = found.get(key);
+			if (entry) {
+				entry.fileCount++;
+			} else {
+				found.set(key, {
+					key,
+					label: profileLabel(p),
+					fileCount: 1,
+					wavelength: p.wavelength,
+					deviceID: p.deviceID,
+					polarization: p.polarization
+				});
+			}
+		}
+	}
+	return [...found.values()].sort((a, b) => {
+		return (
+			Number(a.wavelength) - Number(b.wavelength) ||
+			a.deviceID.localeCompare(b.deviceID) ||
+			a.polarization.localeCompare(b.polarization)
+		);
+	});
+}
+
+/**
+ * Compute heatmap data for one channel across the given files. Files are
+ * treated as time columns sorted by their measurement start time; rows are
+ * bins spaced by the channel bin width (distance in meters). Returns the
+ * matrix plus axes, or an object with an `error` message when the data cannot
+ * be assembled (missing channel, mismatched bin widths, no data).
+ * @param {{ fileIds: number[], channelKey: string, transform: string }} config
+ * @returns {{ error: string } | { channelLabel: string, transformLabel: string, times: Date[], y: number[], z: Float64Array[], nFiles: number, timeStart: Date, timeStop: Date, downsampled: boolean }}
+ */
+export function buildUnfoldData(config) {
+	const { fileIds, channelKey, transform } = config;
+	const data = get(licelFiles);
+
+	/** @type {Array<{ time: Date, profile: any }>} */
+	const measurements = [];
+	for (const id of fileIds) {
+		const lf = data.get(id);
+		if (!lf) continue;
+		let p = null;
+		for (const cand of lf.profiles ?? []) {
+			if (
+				cand.active !== false &&
+				cand.data &&
+				cand.data.length > 0 &&
+				profileKey(cand) === channelKey
+			) {
+				p = cand;
+				break;
+			}
+		}
+		if (!p) continue;
+		measurements.push({ time: lf.measurementStartTime, profile: p });
+	}
+	if (measurements.length === 0) {
+		return { error: 'Канал не найден в выбранных файлах.' };
+	}
+	measurements.sort((a, b) => a.time.getTime() - b.time.getTime());
+
+	const binWidth = measurements[0].profile.binWidth;
+	if (!(binWidth > 0)) return { error: 'Канал имеет некорректную ширину бина.' };
+	for (const m of measurements) {
+		if (!(m.profile.binWidth > 0)) return { error: 'Канал имеет некорректную ширину бина.' };
+		if (Math.abs(m.profile.binWidth - binWidth) > 1e-9 * binWidth) {
+			return { error: 'Ширина бина канала отличается между выбранными файлами.' };
+		}
+	}
+
+	let nBins = Infinity;
+	for (const m of measurements) {
+		nBins = Math.min(nBins, m.profile.data.length);
+	}
+	if (!Number.isFinite(nBins) || nBins < 1) {
+		return { error: 'Канал не содержит данных.' };
+	}
+
+	const allTimes = measurements.map((m) => m.time);
+	const cols = measurements.map((m) => m.profile.data);
+
+	// Decimate rows (bins) and columns (files) uniformly to bound the grid size.
+	const rowStep = Math.max(1, Math.ceil(nBins / UNFOLD_MAX_ROWS));
+	const colStep = Math.max(1, Math.ceil(measurements.length / UNFOLD_MAX_COLS));
+	const downsampled = rowStep > 1 || colStep > 1;
+	const rowIndices = [];
+	for (let j = 0; j < nBins; j += rowStep) rowIndices.push(j);
+	const colIndices = [];
+	for (let i = 0; i < measurements.length; i += colStep) colIndices.push(i);
+	const times = colIndices.map((i) => allTimes[i]);
+
+	const y = new Array(rowIndices.length);
+	const z = new Array(rowIndices.length);
+	for (let r = 0; r < rowIndices.length; r++) {
+		const j = rowIndices[r];
+		y[r] = j * binWidth;
+		const rDist = (j + 0.5) * binWidth;
+		const row = new Float64Array(colIndices.length);
+		for (let c = 0; c < colIndices.length; c++) {
+			const v = cols[colIndices[c]][j];
+			if (transform === 'Pr2') row[c] = v * rDist * rDist;
+			else if (transform === 'logP') row[c] = v > 0 ? Math.log10(v) : NaN;
+			else if (transform === 'logPr2') row[c] = v > 0 ? Math.log10(v * rDist * rDist) : NaN;
+			else row[c] = v;
+		}
+		z[r] = row;
+	}
+
+	return {
+		channelLabel: profileLabel(measurements[0].profile),
+		transformLabel: unfoldTransformById(transform).short,
+		times,
+		y,
+		z,
+		nFiles: measurements.length,
+		timeStart: times[0],
+		timeStop: times[times.length - 1],
+		downsampled
+	};
+}
+
+/**
+ * Open a new non-modal unfold window ("Развертка: …") for the given channel
+ * and value transform over the given files.
+ * @param {{ fileIds: number[], channelKey: string, transform: string }} config
+ */
+export function addUnfoldWindow(config) {
+	const channel = listUnfoldChannels(config.fileIds).find((c) => c.key === config.channelKey);
+	const tf = unfoldTransformById(config.transform);
+	const label = channel?.label ?? config.channelKey;
+	addWindow(`Развертка: ${label} · ${tf.short}`, undefined, {
+		unfold: { ...config, channelLabel: label, transformLabel: tf.short }
+	});
 }
 
 /**
@@ -575,7 +760,7 @@ function loadPackFromZip(bytes, label) {
 		}
 
 		files.set(items);
-		licelFiles.set(fileMap);
+		publishLicelData(fileMap, null);
 		savedChannelSelection.set(null);
 		console.log('openFiles', { zipName: label, files: items });
 		return true;
@@ -666,7 +851,7 @@ export async function restoreSession() {
 
 	nextId = maxId + 1;
 	files.set(items);
-	licelFiles.set(fileMap);
+	publishLicelData(fileMap, null);
 }
 
 // --- NonModalWindow actions ---

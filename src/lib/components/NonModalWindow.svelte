@@ -16,6 +16,8 @@
 		cropByHeightConfig,
 		cropByHeight,
 		licelFiles,
+		licelDataTouched,
+		buildUnfoldData,
 		savedChannelSelection,
 		rememberChannelSelection
 	} from '$lib/state/store';
@@ -48,7 +50,9 @@
 	let PlotlyLib = /** @type {any} */ (null);
 	let isResizing = $state(false);
 	let resizeStart = { x: 0, y: 0, w: 0, h: 0 };
-	let windowWidth = $state(title.startsWith('График: ') ? 640 : 360);
+	let windowWidth = $state(
+		title.startsWith('График: ') ? 640 : title.startsWith('Развертка: ') ? 820 : 360
+	);
 	let windowHeight = $state(/** @type {number | null} */ (null)); // null = auto, explicit px after manual resize
 
 	let config = $state(
@@ -81,6 +85,19 @@
 			channels = profilesToChannels(licel);
 		}
 	}
+
+	// Unfold window: the payload carries the channel/transform config, while the
+	// heatmap matrix is (re)built from the current dataset on every change.
+	const isUnfoldWindow = title.startsWith('Развертка: ');
+	/** @type {{ fileIds: number[], channelKey: string, transform: string, channelLabel?: string, transformLabel?: string } | null} */
+	let unfoldConfig = isUnfoldWindow && payload?.unfold ? payload.unfold : null;
+
+	let unfoldError = $state('');
+	let unfoldInfo = $state('');
+	/** @type {any} */
+	let unfoldPlotData = null;
+	let unfoldChartStarting = false;
+	let unfoldRafId = 0;
 
 	/** @param {LicelFile} lf */
 	function profilesToChannels(lf) {
@@ -148,6 +165,20 @@
 	let datasetUnsub = null;
 
 	onMount(() => {
+		if (isUnfoldWindow) {
+			initUnfoldChart();
+			if (unfoldConfig) {
+				datasetUnsub = licelDataTouched.subscribe((touchedIds) => {
+					// Skip rebuilds when the published change does not affect any of
+					// this window's files (null = whole dataset may have changed).
+					if (touchedIds != null && !touchedIds.some((id) => unfoldConfig.fileIds.includes(id))) {
+						return;
+					}
+					scheduleUnfoldUpdate();
+				});
+			}
+			return;
+		}
 		if (!chartRef || channels.length === 0) return;
 		initChart();
 		if (title.startsWith('График: ') && payload?.fileId != null) {
@@ -172,6 +203,10 @@
 		if (datasetUnsub) {
 			datasetUnsub();
 			datasetUnsub = null;
+		}
+		if (unfoldRafId) {
+			cancelAnimationFrame(unfoldRafId);
+			unfoldRafId = 0;
 		}
 		if (plotlyInstance && PlotlyLib) {
 			PlotlyLib.purge(chartRef);
@@ -272,6 +307,119 @@
 		if (!PlotlyLib || !plotlyInstance || !chartRef) return;
 		if (channels.length === 0) return;
 		PlotlyLib.react(chartRef, buildTraces(), plotlyInstance.layout);
+	}
+
+	/** @param {Date} d */
+	function formatUnfoldTime(d) {
+		if (!(d instanceof Date) || !Number.isFinite(d.getTime())) return '—';
+		return d.toLocaleTimeString('ru-RU', {
+			hour: '2-digit',
+			minute: '2-digit',
+			second: '2-digit'
+		});
+	}
+
+	function rebuildUnfoldData() {
+		unfoldPlotData = null;
+		if (!unfoldConfig) return;
+		const res = buildUnfoldData(unfoldConfig);
+		if (res && 'error' in res) {
+			unfoldError = res.error;
+			unfoldInfo = '';
+			return;
+		}
+		unfoldError = '';
+		unfoldPlotData = res;
+		const decimated = res.downsampled ? ' · сетка прорежена' : '';
+		unfoldInfo = `${res.nFiles} изм. · ${formatUnfoldTime(res.timeStart)} — ${formatUnfoldTime(
+			res.timeStop
+		)}${decimated}`;
+	}
+
+	function purgeUnfoldChart() {
+		if (PlotlyLib && plotlyInstance && chartRef) {
+			PlotlyLib.purge(chartRef);
+		}
+		plotlyInstance = null;
+	}
+
+	function drawUnfoldChart() {
+		if (!PlotlyLib || !unfoldPlotData || !chartRef) return;
+		const { times, y, z, transformLabel } = unfoldPlotData;
+		const spanMs = times[times.length - 1].getTime() - times[0].getTime();
+		const trace = {
+			x: times,
+			y,
+			z,
+			type: 'heatmap',
+			colorscale: 'Viridis',
+			connectgaps: false,
+			colorbar: { title: { text: transformLabel }, thickness: 14 }
+		};
+		const layout = {
+			xaxis: {
+				title: { text: 'Время' },
+				type: 'date',
+				tickformat: spanMs <= 86400000 ? '%H:%M:%S' : '%d.%m %H:%M',
+				hoverformat: '%d.%m.%Y %H:%M:%S',
+				automargin: true,
+				zeroline: false
+			},
+			yaxis: {
+				title: { text: 'Дистанция, м' },
+				automargin: true,
+				zeroline: false
+			},
+			hovermode: 'closest',
+			margin: { l: 70, r: 30, t: 30, b: 70 },
+			paper_bgcolor: 'white',
+			plot_bgcolor: 'white'
+		};
+		const plotlyConfig = {
+			responsive: true,
+			displayModeBar: true,
+			modeBarButtonsToRemove: ['lasso2d', 'select2d']
+		};
+		PlotlyLib.react(chartRef, [trace], layout, plotlyConfig).then((/** @type {any} */ instance) => {
+			plotlyInstance = instance;
+		});
+	}
+
+	async function initUnfoldChart() {
+		if (!unfoldConfig || !chartRef || unfoldChartStarting) return;
+		unfoldChartStarting = true;
+		try {
+			if (!PlotlyLib) PlotlyLib = await import('plotly.js-dist-min');
+			rebuildUnfoldData();
+			if (!unfoldError && unfoldPlotData) drawUnfoldChart();
+		} catch (err) {
+			const detail = err instanceof Error ? err.message : String(err);
+			unfoldError = `Не удалось построить график: ${detail}`;
+		} finally {
+			unfoldChartStarting = false;
+		}
+	}
+
+	function updateUnfoldChart() {
+		if (!unfoldConfig) return;
+		if (!PlotlyLib || !plotlyInstance || !chartRef) {
+			initUnfoldChart();
+			return;
+		}
+		rebuildUnfoldData();
+		if (unfoldError || !unfoldPlotData) {
+			purgeUnfoldChart();
+			return;
+		}
+		drawUnfoldChart();
+	}
+
+	function scheduleUnfoldUpdate() {
+		if (unfoldRafId) return;
+		unfoldRafId = requestAnimationFrame(() => {
+			unfoldRafId = 0;
+			updateUnfoldChart();
+		});
 	}
 
 	/** @param {string} name */
@@ -551,6 +699,27 @@
 				{/if}
 			</div>
 		</div>
+	{:else if isUnfoldWindow}
+		<div class="flex h-full flex-col" style="min-height: 400px;">
+			{#if unfoldInfo}
+				<div
+					class="flex items-center justify-between border-b border-gray-200 px-3 py-1.5 text-xs text-gray-500"
+				>
+					<span>{unfoldInfo}</span>
+					<span>{unfoldConfig?.channelLabel}</span>
+				</div>
+			{/if}
+			<div class="relative min-h-0 flex-1 p-2">
+				<div bind:this={chartRef} style="width: 100%; height: 100%; min-height: 300px;"></div>
+				{#if unfoldError}
+					<div
+						class="absolute inset-2 z-10 flex items-center justify-center rounded bg-white/90 p-3 text-center text-sm text-red-600"
+					>
+						{unfoldError}
+					</div>
+				{/if}
+			</div>
+		</div>
 	{:else}
 		<div class="flex-1 overflow-auto p-4">
 			{#if title === 'Удаление фона'}
@@ -711,7 +880,7 @@
 		</div>
 	{/if}
 
-	{#if title.startsWith('График: ')}
+	{#if title.startsWith('График: ') || isUnfoldWindow}
 		<button
 			onmousedown={handleResizeStart}
 			aria-label="Изменить размер окна"
