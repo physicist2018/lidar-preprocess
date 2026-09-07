@@ -345,7 +345,7 @@
 
 	function drawUnfoldChart() {
 		if (!PlotlyLib || !unfoldPlotData || !chartRef) return;
-		const { times, y, z, transformLabel } = unfoldPlotData;
+		const { times, y, z, transformLabel, zMin, zMax } = unfoldPlotData;
 		const spanMs = times[times.length - 1].getTime() - times[0].getTime();
 		const trace = {
 			x: times,
@@ -353,6 +353,7 @@
 			z,
 			type: 'heatmap',
 			colorscale: 'Viridis',
+			...(zMin != null && zMax != null && { zmin: zMin, zmax: zMax }),
 			connectgaps: false,
 			colorbar: { title: { text: transformLabel }, thickness: 14 }
 		};

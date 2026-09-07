@@ -469,8 +469,8 @@ export async function cropByHeight(maxHeight) {
 export const UNFOLD_TRANSFORMS = [
 	{ id: 'P', label: 'Исходный сигнал P', short: 'P' },
 	{ id: 'Pr2', label: 'P·r²', short: 'P·r²' },
-	{ id: 'logP', label: 'log₁₀(P)', short: 'log₁₀(P)' },
-	{ id: 'logPr2', label: 'log₁₀(P·r²)', short: 'log₁₀(P·r²)' }
+	{ id: 'symlogP', label: 'symlog(P)', short: 'symlog(P)' },
+	{ id: 'symlogPr2', label: 'symlog(P·r²)', short: 'symlog(P·r²)' }
 ];
 
 // Maximum heatmap grid resolution. Larger inputs are uniformly decimated
@@ -478,6 +478,18 @@ export const UNFOLD_TRANSFORMS = [
 // bounded regardless of the selected pack size.
 const UNFOLD_MAX_ROWS = 2500;
 const UNFOLD_MAX_COLS = 2500;
+
+/** Signed logarithm: sign(x)·log10(1+|x|). Continuous at zero, behaves like
+ * log10 for large |x| and is defined for negative values.
+ * @param {number} x
+ */
+function symlogValue(x) {
+	return Math.sign(x) * Math.log10(1 + Math.abs(x));
+}
+
+// Number of finite matrix values used to estimate the 5–95 % color range.
+// Larger inputs are sampled evenly, so the estimate is approximate.
+const UNFOLD_RANGE_SAMPLES = 200000;
 
 /** @param {string} id */
 export function unfoldTransformById(id) {
@@ -531,7 +543,7 @@ export function listUnfoldChannels(fileIds) {
  * matrix plus axes, or an object with an `error` message when the data cannot
  * be assembled (missing channel, mismatched bin widths, no data).
  * @param {{ fileIds: number[], channelKey: string, transform: string }} config
- * @returns {{ error: string } | { channelLabel: string, transformLabel: string, times: Date[], y: number[], z: Float64Array[], nFiles: number, timeStart: Date, timeStop: Date, downsampled: boolean }}
+ * @returns {{ error: string } | { channelLabel: string, transformLabel: string, times: Date[], y: number[], z: Float64Array[], nFiles: number, timeStart: Date, timeStop: Date, downsampled: boolean, zMin: number | null, zMax: number | null }}
  */
 export function buildUnfoldData(config) {
 	const { fileIds, channelKey, transform } = config;
@@ -602,11 +614,46 @@ export function buildUnfoldData(config) {
 		for (let c = 0; c < colIndices.length; c++) {
 			const v = cols[colIndices[c]][j];
 			if (transform === 'Pr2') row[c] = v * rDist * rDist;
-			else if (transform === 'logP') row[c] = v > 0 ? Math.log10(v) : NaN;
-			else if (transform === 'logPr2') row[c] = v > 0 ? Math.log10(v * rDist * rDist) : NaN;
+			else if (transform === 'symlogP') row[c] = symlogValue(v);
+			else if (transform === 'symlogPr2') row[c] = symlogValue(v * rDist * rDist);
 			else row[c] = v;
 		}
 		z[r] = row;
+	}
+
+	// Compute 5th / 95th percentile bounds for the color axis.
+	let zMin = null;
+	let zMax = null;
+	{
+		const finite = [];
+		for (const row of z) {
+			for (let c = 0; c < row.length; c++) {
+				const v = row[c];
+				if (Number.isFinite(v)) finite.push(v);
+			}
+		}
+		if (finite.length >= 2) {
+			/** @type {Float64Array} */
+			let sample;
+			if (finite.length <= UNFOLD_RANGE_SAMPLES) {
+				sample = Float64Array.from(finite);
+			} else {
+				const step = Math.ceil(finite.length / UNFOLD_RANGE_SAMPLES);
+				const sampled = new Float64Array(UNFOLD_RANGE_SAMPLES);
+				let idx = 0;
+				for (let i = 0; i < finite.length && idx < UNFOLD_RANGE_SAMPLES; i += step) {
+					sampled[idx++] = finite[i];
+				}
+				sample = sampled.subarray(0, idx);
+			}
+			sample.sort();
+			const p5 = sample[Math.floor(sample.length * 0.05)];
+			const p95 = sample[Math.floor(sample.length * 0.95)];
+			if (p95 > p5) {
+				zMin = p5;
+				zMax = p95;
+			}
+		}
 	}
 
 	return {
@@ -618,7 +665,9 @@ export function buildUnfoldData(config) {
 		nFiles: measurements.length,
 		timeStart: times[0],
 		timeStop: times[times.length - 1],
-		downsampled
+		downsampled,
+		zMin,
+		zMax
 	};
 }
 
