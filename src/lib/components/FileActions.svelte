@@ -136,36 +136,38 @@
 		Удалить выделенные
 	</button>
 	<div class="my-1 border-t border-gray-200"></div>
-	<button
-		onclick={handleMedianFiltering}
-		class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
-	>
-		Медианная фильтрация
-	</button>
-	<button
-		onclick={handleRemoveBackground}
-		class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
-	>
-		Удалить фон
-	</button>
-	<button
-		onclick={handleMergeChannels}
-		class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
-	>
-		Склеить каналы
-	</button>
-	<button
-		onclick={handleCropByHeight}
-		class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
-	>
-		Обрезать по высоте
-	</button>
-	<button
-		onclick={handleDrawUnfold}
-		class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
-	>
-		Нарисовать развертку
-	</button>
+	<div class="grid grid-cols-2 gap-1.5">
+		<button
+			onclick={handleMedianFiltering}
+			class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
+		>
+			Медианная фильтрация
+		</button>
+		<button
+			onclick={handleRemoveBackground}
+			class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
+		>
+			Удалить фон
+		</button>
+		<button
+			onclick={handleMergeChannels}
+			class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
+		>
+			Склеить каналы
+		</button>
+		<button
+			onclick={handleCropByHeight}
+			class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
+		>
+			Обрезать по высоте
+		</button>
+		<button
+			onclick={handleDrawUnfold}
+			class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
+		>
+			Нарисовать развертку
+		</button>
+	</div>
 	<div class="my-1 border-t border-gray-200"></div>
 	<button
 		onclick={handleOpenFiles}
