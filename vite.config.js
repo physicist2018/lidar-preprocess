@@ -3,6 +3,12 @@ import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 
+// Deploy path for the site. Empty by default (domain root, e.g. user.github.io);
+// set BASE_PATH=/repo-name when deploying to a GitHub Pages project page.
+const basePath = (
+	(/** @type {any} */ (globalThis)).process?.env?.BASE_PATH ?? ''
+).trim();
+
 export default defineConfig({
 	plugins: [
 		tailwindcss(),
@@ -17,6 +23,12 @@ export default defineConfig({
 			// the build output is plain static files served by any web server.
 			adapter: adapter({
 				fallback: 'index.html'
+			}),
+
+			...(basePath && {
+				paths: {
+					base: basePath
+				}
 			})
 		})
 	]
