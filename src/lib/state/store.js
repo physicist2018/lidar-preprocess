@@ -6,17 +6,76 @@ import {
 } from 'licelfile-js';
 import { saveSession, loadSession } from './persistence';
 
-// --- File store ---
+// ---------------------------------------------------------------------------
+// Global state
+// ---------------------------------------------------------------------------
+
+/** Open files of the current working dataset. */
 export const files = writable(
 	/** @type {Array<{ id: number, name: string, size: string, selected: boolean }>} */ ([])
 );
 
+/** Non-modal application windows ("график", "развертка", ...). */
 export const openWindows = writable(
 	/** @type {Array<{ id: number, title: string, x: number, y: number, payload?: any }>} */ ([])
 );
 
-// --- Error dialog state ---
+/** Message shown in the error dialog ('' hides it). */
 export const errorMessage = writable('');
+
+/**
+ * Map of file id -> parsed/modified LicelFile of the current working dataset.
+ * @type {import('svelte/store').Writable<Map<number, any>>}
+ */
+export const licelFiles = writable(/** @type {Map<number, any>} */ (new Map()));
+
+/**
+ * File ids touched by the last licelFiles publish; null means every file may
+ * have changed (new pack loaded / session restored). Published together with
+ * the new licelFiles map so dependent windows can skip unaffected rebuilds.
+ */
+export const licelDataTouched = writable(/** @type {number[] | null} */ (null));
+
+/** Background removal settings for the dialog form. */
+export const backgroundRemoval = writable(
+	/** @type {{ method: string, height: string, referenceFile: File | null }} */ ({
+		method: 'average', // 'average' | 'median' | 'reference'
+		height: '',
+		referenceFile: null
+	})
+);
+
+/** Largest allowed median filter window (odd). */
+export const MEDIAN_WINDOW_MAX = 101;
+
+/** Median filter settings for the dialog form. */
+export const medianFilter = writable(
+	/** @type {{ windowSize: string }} */ ({
+		windowSize: ''
+	})
+);
+
+/** Height crop settings for the dialog form. */
+export const cropByHeightConfig = writable(
+	/** @type {{ maxHeight: string }} */ ({
+		maxHeight: ''
+	})
+);
+
+/**
+ * Snapshot of channel visibility (channel name -> enabled) remembered from a
+ * graph window; applied to graph windows opened afterwards.
+ */
+export const savedChannelSelection = writable(/** @type {Record<string, boolean> | null} */ (null));
+
+/** @param {Record<string, boolean>} states */
+export function rememberChannelSelection(states) {
+	savedChannelSelection.set({ ...states });
+}
+
+// ---------------------------------------------------------------------------
+// Error dialog
+// ---------------------------------------------------------------------------
 
 /** @param {string} message */
 export function showError(message) {
@@ -27,58 +86,125 @@ export function clearError() {
 	errorMessage.set('');
 }
 
-// --- Loaded Licel data ---
-// Map file id -> parsed/modified LicelFile of the current working dataset
-export const licelFiles = writable(/** @type {Map<number, any>} */ (new Map()));
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
 
-// --- Data change notifications ---
-// File ids touched by the last licelFiles publish; null means every file may
-// have changed (new pack loaded / session restored). Published together with
-// the new licelFiles map so dependent windows can skip unaffected rebuilds.
-export const licelDataTouched = writable(/** @type {number[] | null} */ (null));
+/**
+ * Whether a profile carries data at all, regardless of its active flag.
+ * @param {any} p
+ */
+function hasData(p) {
+	return p && p.data && p.data.length > 0;
+}
 
-/** @param {Map<number, any>} map @param {number[] | null} touchedIds */
+/**
+ * Whether a profile is a candidate for channel processing — it is active and
+ * carries data. Inactive/empty profiles are ignored everywhere.
+ * @param {any} p
+ */
+function isProfileUsable(p) {
+	return hasData(p) && p.active !== false;
+}
+
+/**
+ * Iterate over the profiles carrying data of the given files, in file order,
+ * invoking `fn(profile, licelFile, fileId)` for each. Inactive profiles are
+ * skipped unless `includeInactive` is set. Stops early (and returns false) when
+ * `fn` returns false, so validations can bail out of the whole batch.
+ * @param {Map<number, any>} data
+ * @param {number[]} fileIds
+ * @param {(profile: any, licelFile: any, fileId: number) => boolean | void} fn
+ * @param {{ includeInactive?: boolean }} [options]
+ * @returns {boolean} false when iteration was stopped early
+ */
+function forEachProfile(data, fileIds, fn, options = {}) {
+	const includeInactive = options.includeInactive ?? false;
+	for (const id of fileIds) {
+		const lf = data.get(id);
+		if (!lf) continue;
+		for (const p of lf.profiles ?? []) {
+			if (!hasData(p)) continue;
+			if (!includeInactive && p.active === false) continue;
+			if (fn(p, lf, id) === false) return false;
+		}
+	}
+	return true;
+}
+
+/**
+ * Ids of the selected files, or null after showing the "no selection" error.
+ * @returns {number[] | null}
+ */
+function getSelectedFileIds() {
+	const ids = get(files)
+		.filter((f) => f.selected)
+		.map((f) => f.id);
+	if (ids.length === 0) showError('Не выделено ни одного файла.');
+	return ids.length > 0 ? ids : null;
+}
+
+/** @param {Float64Array} values */
+function allFinite(values) {
+	for (let i = 0; i < values.length; i++) {
+		if (!Number.isFinite(values[i])) return false;
+	}
+	return true;
+}
+
+/**
+ * Stable channel signature used to pair profiles across files.
+ * @param {any} p
+ */
+function profileKey(p) {
+	return `${p.deviceID || ''}|${p.wavelength || ''}|${p.polarization || ''}`;
+}
+
+/**
+ * Human-readable channel description (same convention as graph windows).
+ * @param {any} p
+ */
+function profileLabel(p) {
+	const mode =
+		p.deviceID === 'BC' ? 'фотон' : p.deviceID === 'BT' ? 'аналог' : p.deviceID || 'канал';
+	const pol = p.polarization ? ` (${p.polarization})` : '';
+	return `${p.wavelength || '?'} нм${pol} · ${mode}`;
+}
+
+/** @param {Float64Array} values */
+function meanValue(values) {
+	let sum = 0;
+	for (let i = 0; i < values.length; i++) sum += values[i];
+	return sum / values.length;
+}
+
+/** @param {Float64Array} values */
+function medianValue(values) {
+	if (values.length === 0) return NaN;
+	const sorted = Float64Array.from(values);
+	sorted.sort();
+	const mid = sorted.length >> 1;
+	return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+// ---------------------------------------------------------------------------
+// Data publication
+// ---------------------------------------------------------------------------
+
+/**
+ * Publish a new licelFiles map together with the set of file ids it changed.
+ * @param {Map<number, any>} map
+ * @param {number[] | null} touchedIds
+ */
 function publishLicelData(map, touchedIds) {
 	licelFiles.set(map);
 	licelDataTouched.set(touchedIds);
 }
 
-// --- Background removal state ---
-export const backgroundRemoval = writable(
-	/** @type {{ method: string, height: string, referenceFile: File | null }} */ ({
-		method: 'average', // 'average' | 'median' | 'reference'
-		height: '',
-		referenceFile: null
-	})
-);
+// ---------------------------------------------------------------------------
+// File list actions
+// ---------------------------------------------------------------------------
 
-// --- Median filtering state ---
-export const MEDIAN_WINDOW_MAX = 101;
-
-export const medianFilter = writable(
-	/** @type {{ windowSize: string }} */ ({
-		windowSize: ''
-	})
-);
-
-// --- Height crop state ---
-export const cropByHeightConfig = writable(
-	/** @type {{ maxHeight: string }} */ ({
-		maxHeight: ''
-	})
-);
-
-// --- Saved channel selection for graph windows ---
-// Snapshot of channel visibility (channel name -> enabled) remembered from a
-// graph window; applied to graph windows opened afterwards.
-export const savedChannelSelection = writable(/** @type {Record<string, boolean> | null} */ (null));
-
-/** @param {Record<string, boolean>} states */
-export function rememberChannelSelection(states) {
-	savedChannelSelection.set({ ...states });
-}
-
-// --- Actions ---
 /** @param {boolean} selected */
 export function toggleSelectAll(selected) {
 	const current = get(files);
@@ -109,40 +235,9 @@ export async function deleteSelected() {
 	await persistSession();
 }
 
-// --- Background removal helpers ---
-
-/** Stable channel signature used to pair profiles across files.
- * @param {any} p
- */
-function profileKey(p) {
-	return `${p.deviceID || ''}|${p.wavelength || ''}|${p.polarization || ''}`;
-}
-
-/** Human-readable channel description (same convention as graph windows).
- * @param {any} p
- */
-function profileLabel(p) {
-	const mode =
-		p.deviceID === 'BC' ? 'фотон' : p.deviceID === 'BT' ? 'аналог' : p.deviceID || 'канал';
-	const pol = p.polarization ? ` (${p.polarization})` : '';
-	return `${p.wavelength || '?'} нм${pol} · ${mode}`;
-}
-
-/** @param {Float64Array} values */
-function meanValue(values) {
-	let sum = 0;
-	for (let i = 0; i < values.length; i++) sum += values[i];
-	return sum / values.length;
-}
-
-/** @param {Float64Array} values */
-function medianValue(values) {
-	if (values.length === 0) return NaN;
-	const sorted = Float64Array.from(values);
-	sorted.sort();
-	const mid = sorted.length >> 1;
-	return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
-}
+// ---------------------------------------------------------------------------
+// Background removal
+// ---------------------------------------------------------------------------
 
 /**
  * Subtract a reference profile from a target profile element-wise over the
@@ -176,6 +271,49 @@ function subtractProfileStatistic(profile, height, method) {
 }
 
 /**
+ * Read the reference file and index its channels by profile key. Returns the
+ * channel map, or null after showing the relevant error.
+ * @param {File} referenceFile
+ * @returns {Promise<Map<string, any> | null>}
+ */
+async function loadReferenceChannelMap(referenceFile) {
+	/** @type {Map<string, any>} */
+	const refChannels = new Map();
+	try {
+		const buffer = await referenceFile.arrayBuffer();
+		const ref = loadLicelFileFromBuffer(new Uint8Array(buffer));
+		for (const p of ref.profiles ?? []) {
+			if (!isProfileUsable(p)) continue;
+			const key = profileKey(p);
+			if (refChannels.has(key)) {
+				showError(
+					`В референсном файле "${referenceFile.name}" несколько каналов с одинаковыми параметрами (${profileLabel(p)}).`
+				);
+				return null;
+			}
+			refChannels.set(key, p);
+		}
+	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
+		showError(`Не удалось прочитать референсный файл "${referenceFile.name}": ${detail}`);
+		return null;
+	}
+	if (refChannels.size === 0) {
+		showError(`В референсном файле "${referenceFile.name}" нет каналов с данными.`);
+		return null;
+	}
+	for (const p of refChannels.values()) {
+		if (!allFinite(p.data)) {
+			showError(
+				`Канал ${profileLabel(p)} референсного файла "${referenceFile.name}" содержит нечисловые значения.`
+			);
+			return null;
+		}
+	}
+	return refChannels;
+}
+
+/**
  * Subtract the corresponding channel of a reference Licel file from every
  * channel of every selected file. Channels are paired by wavelength,
  * polarization and device mode.
@@ -186,72 +324,33 @@ function subtractProfileStatistic(profile, height, method) {
  * @returns {Promise<boolean>}
  */
 async function subtractReferenceFromFiles(selected, fileNames, data, referenceFile) {
-	/** @type {Map<string, any>} */
-	let refChannels;
-	try {
-		const buffer = await referenceFile.arrayBuffer();
-		const ref = loadLicelFileFromBuffer(new Uint8Array(buffer));
-		refChannels = new Map();
-		for (const p of ref.profiles ?? []) {
-			if (p.active === false || !p.data || p.data.length === 0) continue;
-			const key = profileKey(p);
-			if (refChannels.has(key)) {
-				showError(
-					`В референсном файле "${referenceFile.name}" несколько каналов с одинаковыми параметрами (${profileLabel(p)}).`
-				);
-				return false;
-			}
-			refChannels.set(key, p);
-		}
-	} catch (err) {
-		const detail = err instanceof Error ? err.message : String(err);
-		showError(`Не удалось прочитать референсный файл "${referenceFile.name}": ${detail}`);
-		return false;
-	}
-	if (refChannels.size === 0) {
-		showError(`В референсном файле "${referenceFile.name}" нет каналов с данными.`);
-		return false;
-	}
-	for (const p of refChannels.values()) {
-		for (let i = 0; i < p.data.length; i++) {
-			if (!Number.isFinite(p.data[i])) {
-				showError(
-					`Канал ${profileLabel(p)} референсного файла "${referenceFile.name}" содержит нечисловые значения.`
-				);
-				return false;
-			}
-		}
-	}
-	for (const id of selected) {
-		const lf = data.get(id);
-		if (!lf) continue;
+	const refChannels = await loadReferenceChannelMap(referenceFile);
+	if (!refChannels) return false;
+
+	// Validate before mutating: every selected channel must have a matching
+	// reference channel with a matching bin width.
+	const valid = forEachProfile(data, selected, (p, lf, id) => {
 		const fileName = fileNames.get(id) ?? `#${id}`;
-		for (const p of lf.profiles ?? []) {
-			if (p.active === false || !p.data || p.data.length === 0) continue;
-			const refProfile = refChannels.get(profileKey(p));
-			if (!refProfile) {
-				showError(
-					`В референсном файле "${referenceFile.name}" нет канала ${profileLabel(p)} (файл "${fileName}").`
-				);
-				return false;
-			}
-			const binScale = Math.max(Math.abs(p.binWidth), Math.abs(refProfile.binWidth));
-			if (Math.abs(p.binWidth - refProfile.binWidth) > 1e-6 * binScale) {
-				showError(
-					`Ширина бина канала ${profileLabel(p)} файла "${fileName}" (${p.binWidth} м) не совпадает с референсным каналом (${refProfile.binWidth} м).`
-				);
-				return false;
-			}
+		const refProfile = refChannels.get(profileKey(p));
+		if (!refProfile) {
+			showError(
+				`В референсном файле "${referenceFile.name}" нет канала ${profileLabel(p)} (файл "${fileName}").`
+			);
+			return false;
 		}
-	}
-	for (const id of selected) {
-		const lf = data.get(id);
-		if (!lf) continue;
-		for (const p of lf.profiles ?? []) {
-			if (p.active === false || !p.data || p.data.length === 0) continue;
-			subtractProfileReference(p, refChannels.get(profileKey(p)));
+		const binScale = Math.max(Math.abs(p.binWidth), Math.abs(refProfile.binWidth));
+		if (Math.abs(p.binWidth - refProfile.binWidth) > 1e-6 * binScale) {
+			showError(
+				`Ширина бина канала ${profileLabel(p)} файла "${fileName}" (${p.binWidth} м) не совпадает с референсным каналом (${refProfile.binWidth} м).`
+			);
+			return false;
 		}
-	}
+	});
+	if (!valid) return false;
+
+	forEachProfile(data, selected, (p) => {
+		subtractProfileReference(p, refChannels.get(profileKey(p)));
+	});
 	return true;
 }
 
@@ -267,37 +366,24 @@ async function subtractReferenceFromFiles(selected, fileNames, data, referenceFi
  * @returns {boolean}
  */
 function subtractStatisticFromFiles(selected, fileNames, data, height, method) {
-	for (const id of selected) {
-		const lf = data.get(id);
-		if (!lf) continue;
+	// Validate before mutating: every channel must be long enough and finite.
+	const valid = forEachProfile(data, selected, (p, lf, id) => {
+		if (!(p.binWidth > 0)) return;
 		const fileName = fileNames.get(id) ?? `#${id}`;
-		for (const p of lf.profiles ?? []) {
-			if (p.active === false || !p.data || p.data.length === 0) continue;
-			if (!(p.binWidth > 0)) continue;
-			const start = Math.floor(height / p.binWidth);
-			if (start >= p.data.length) {
-				showError(
-					`Канал ${profileLabel(p)} файла "${fileName}" короче высоты начала (${height} м).`
-				);
-				return false;
-			}
-			for (let i = 0; i < p.data.length; i++) {
-				if (!Number.isFinite(p.data[i])) {
-					showError(`Канал ${profileLabel(p)} файла "${fileName}" содержит нечисловые значения.`);
-					return false;
-				}
-			}
+		if (Math.floor(height / p.binWidth) >= p.data.length) {
+			showError(`Канал ${profileLabel(p)} файла "${fileName}" короче высоты начала (${height} м).`);
+			return false;
 		}
-	}
-	for (const id of selected) {
-		const lf = data.get(id);
-		if (!lf) continue;
-		for (const p of lf.profiles ?? []) {
-			if (p.active === false || !p.data || p.data.length === 0) continue;
-			if (!(p.binWidth > 0)) continue;
-			subtractProfileStatistic(p, height, method);
+		if (!allFinite(p.data)) {
+			showError(`Канал ${profileLabel(p)} файла "${fileName}" содержит нечисловые значения.`);
+			return false;
 		}
-	}
+	});
+	if (!valid) return false;
+
+	forEachProfile(data, selected, (p) => {
+		if (p.binWidth > 0) subtractProfileStatistic(p, height, method);
+	});
 	return true;
 }
 
@@ -313,45 +399,41 @@ function subtractStatisticFromFiles(selected, fileNames, data, height, method) {
 export async function removeBackground(params = {}) {
 	const { method = 'average', height = null, referenceFile = null } = params;
 
-	const selected = get(files)
-		.filter((f) => f.selected)
-		.map((f) => f.id);
-	if (selected.length === 0) {
-		showError('Не выделено ни одного файла.');
-		return;
-	}
+	const selected = getSelectedFileIds();
+	if (!selected) return;
 
 	const data = get(licelFiles);
 	/** @type {Map<number, string>} */
 	const fileNames = new Map(get(files).map((f) => [f.id, f.name]));
 
-	let ok = false;
 	if (method === 'reference') {
 		if (!referenceFile) {
 			showError('Укажите референсный файл.');
 			return;
 		}
-		ok = await subtractReferenceFromFiles(selected, fileNames, data, referenceFile);
+		if (!(await subtractReferenceFromFiles(selected, fileNames, data, referenceFile))) return;
 	} else if (method === 'average' || method === 'median') {
 		const bgHeight = /** @type {number} */ (height);
 		if (!Number.isFinite(bgHeight) || bgHeight < 0) {
 			showError('Укажите корректную высоту начала (неотрицательное число метров).');
 			return;
 		}
-		ok = subtractStatisticFromFiles(selected, fileNames, data, bgHeight, method);
+		if (!subtractStatisticFromFiles(selected, fileNames, data, bgHeight, method)) return;
 	} else {
 		showError(`Неизвестный метод удаления фона: ${method}.`);
 		return;
 	}
-	if (!ok) return;
 
 	publishLicelData(new Map(data), selected);
 	refreshFileSizes(selected);
 
 	backgroundRemoval.set({ method: 'average', height: '', referenceFile: null });
-	console.log('removeBackground', { method, height, referenceFile: referenceFile?.name, selected });
 	await persistSession();
 }
+
+// ---------------------------------------------------------------------------
+// Median filtering
+// ---------------------------------------------------------------------------
 
 /**
  * Apply a median filter to a copy of the source array and return a new array.
@@ -388,39 +470,26 @@ function medianFilterValues(data, windowSize) {
  * @param {number} windowSize
  */
 export async function medianFiltering(windowSize) {
-	const selected = get(files)
-		.filter((f) => f.selected)
-		.map((f) => f.id);
-	if (selected.length === 0) {
-		showError('Не выделено ни одного файла.');
-		return;
-	}
+	const selected = getSelectedFileIds();
+	if (!selected) return;
 
 	const data = get(licelFiles);
-	for (const id of selected) {
-		const lf = data.get(id);
-		if (!lf) continue;
-		for (const p of lf.profiles ?? []) {
-			if (p.active === false || !p.data || p.data.length === 0) continue;
-			p.data = medianFilterValues(p.data, windowSize);
-		}
-	}
+	forEachProfile(data, selected, (p) => {
+		p.data = medianFilterValues(p.data, windowSize);
+	});
 	publishLicelData(new Map(data), selected);
 
 	medianFilter.set({ windowSize: '' });
-	console.log('medianFiltering', { selected, windowSize });
 	await persistSession();
 }
 
 export function mergeChannels() {
 	// TODO: implement
-	console.log(
-		'mergeChannels',
-		get(files)
-			.filter((f) => f.selected)
-			.map((f) => f.id)
-	);
 }
+
+// ---------------------------------------------------------------------------
+// Height crop
+// ---------------------------------------------------------------------------
 
 /**
  * Trim every channel of every selected file to the given maximum height (meters).
@@ -430,40 +499,37 @@ export function mergeChannels() {
  * @param {number} maxHeight
  */
 export async function cropByHeight(maxHeight) {
-	const selected = get(files)
-		.filter((f) => f.selected)
-		.map((f) => f.id);
-	if (selected.length === 0) {
-		showError('Не выделено ни одного файла.');
-		return;
-	}
+	const selected = getSelectedFileIds();
+	if (!selected) return;
 	if (!Number.isFinite(maxHeight) || maxHeight <= 0) {
 		showError('Укажите корректную максимальную высоту.');
 		return;
 	}
 
 	const data = get(licelFiles);
-	for (const id of selected) {
-		const lf = data.get(id);
-		if (!lf) continue;
-		for (const p of lf.profiles ?? []) {
-			if (!(p.binWidth > 0) || !p.data || p.data.length === 0) continue;
+	forEachProfile(
+		data,
+		selected,
+		(p) => {
+			if (!(p.binWidth > 0)) return;
 			const total = Number.isFinite(p.nDataPoints) ? p.nDataPoints : p.data.length;
 			const keep = Math.min(Math.floor(maxHeight / p.binWidth), total);
-			if (keep >= total || keep < 1) continue;
+			if (keep >= total || keep < 1) return;
 			p.data = p.data.slice(0, keep);
 			p.nDataPoints = p.data.length;
-		}
-	}
+		},
+		{ includeInactive: true }
+	);
 	publishLicelData(new Map(data), selected);
 	refreshFileSizes(selected);
 
 	cropByHeightConfig.set({ maxHeight: '' });
-	console.log('cropByHeight', { selected, maxHeight });
 	await persistSession();
 }
 
-// --- Unfold (heatmap) support ---
+// ---------------------------------------------------------------------------
+// Unfold (heatmap) support
+// ---------------------------------------------------------------------------
 
 /** Value transforms available for unfold ("развертка") windows. */
 export const UNFOLD_TRANSFORMS = [
@@ -473,23 +539,21 @@ export const UNFOLD_TRANSFORMS = [
 	{ id: 'symlogPr2', label: 'symlog(P·r²)', short: 'symlog(P·r²)' }
 ];
 
-// Maximum heatmap grid resolution. Larger inputs are uniformly decimated
-// (sampling every n-th bin / file) so matrix memory and rebuild cost stay
-// bounded regardless of the selected pack size.
+/** Maximum heatmap grid resolution; larger inputs are uniformly decimated. */
 const UNFOLD_MAX_ROWS = 2500;
 const UNFOLD_MAX_COLS = 2500;
 
-/** Signed logarithm: sign(x)·log10(1+|x|). Continuous at zero, behaves like
+/** Number of finite matrix values used to estimate the 5–95 % color range. */
+const UNFOLD_RANGE_SAMPLES = 200000;
+
+/**
+ * Signed logarithm: sign(x)·log10(1+|x|). Continuous at zero, behaves like
  * log10 for large |x| and is defined for negative values.
  * @param {number} x
  */
 function symlogValue(x) {
 	return Math.sign(x) * Math.log10(1 + Math.abs(x));
 }
-
-// Number of finite matrix values used to estimate the 5–95 % color range.
-// Larger inputs are sampled evenly, so the estimate is approximate.
-const UNFOLD_RANGE_SAMPLES = 200000;
 
 /** @param {string} id */
 export function unfoldTransformById(id) {
@@ -506,27 +570,22 @@ export function listUnfoldChannels(fileIds) {
 	const data = get(licelFiles);
 	/** @type {Map<string, { key: string, label: string, fileCount: number, wavelength: number, deviceID: string, polarization: string }>} */
 	const found = new Map();
-	for (const id of fileIds) {
-		const lf = data.get(id);
-		if (!lf) continue;
-		for (const p of lf.profiles ?? []) {
-			if (p.active === false || !p.data || p.data.length === 0) continue;
-			const key = profileKey(p);
-			const entry = found.get(key);
-			if (entry) {
-				entry.fileCount++;
-			} else {
-				found.set(key, {
-					key,
-					label: profileLabel(p),
-					fileCount: 1,
-					wavelength: p.wavelength,
-					deviceID: p.deviceID,
-					polarization: p.polarization
-				});
-			}
+	forEachProfile(data, fileIds, (p) => {
+		const key = profileKey(p);
+		const entry = found.get(key);
+		if (entry) {
+			entry.fileCount++;
+		} else {
+			found.set(key, {
+				key,
+				label: profileLabel(p),
+				fileCount: 1,
+				wavelength: p.wavelength,
+				deviceID: p.deviceID,
+				polarization: p.polarization
+			});
 		}
-	}
+	});
 	return [...found.values()].sort((a, b) => {
 		return (
 			Number(a.wavelength) - Number(b.wavelength) ||
@@ -534,6 +593,136 @@ export function listUnfoldChannels(fileIds) {
 			a.polarization.localeCompare(b.polarization)
 		);
 	});
+}
+
+/**
+ * Collect one candidate profile per file (the first matching the channel key),
+ * treated as a time column: measurement start time + profile.
+ * @param {Map<number, any>} data
+ * @param {number[]} fileIds
+ * @param {string} channelKey
+ * @returns {Array<{ time: Date, profile: any }>}
+ */
+function collectChannelMeasurements(data, fileIds, channelKey) {
+	const measurements = [];
+	for (const id of fileIds) {
+		const lf = data.get(id);
+		if (!lf) continue;
+		const profile = (lf.profiles ?? []).find(
+			/** @param {any} p */
+			(p) => isProfileUsable(p) && profileKey(p) === channelKey
+		);
+		if (profile) measurements.push({ time: lf.measurementStartTime, profile });
+	}
+	return measurements;
+}
+
+/**
+ * Verify all measurements share the same positive bin width.
+ * @param {Array<{ time: Date, profile: any }>} measurements
+ * @returns {{ binWidth: number } | { error: string }}
+ */
+function resolveCommonBinWidth(measurements) {
+	const first = measurements[0].profile.binWidth;
+	for (const m of measurements) {
+		const width = m.profile.binWidth;
+		if (!(width > 0)) return { error: 'Канал имеет некорректную ширину бина.' };
+		if (Math.abs(width - first) > 1e-9 * first) {
+			return { error: 'Ширина бина канала отличается между выбранными файлами.' };
+		}
+	}
+	return { binWidth: first };
+}
+
+/**
+ * Evenly-spaced indices in [0, length), stepping so at most `max` are produced.
+ * @param {number} length
+ * @param {number} max
+ * @returns {{ indices: number[], downsampled: boolean }}
+ */
+function decimateIndices(length, max) {
+	const step = Math.max(1, Math.ceil(length / max));
+	const indices = [];
+	for (let i = 0; i < length; i += step) indices.push(i);
+	return { indices, downsampled: step > 1 };
+}
+
+/**
+ * Map a channel value to its display value for the given transform.
+ * @param {number} v
+ * @param {string} transform
+ * @param {number} distance meters of the bin center
+ */
+function applyUnfoldTransform(v, transform, distance) {
+	if (transform === 'Pr2') return v * distance * distance;
+	if (transform === 'symlogP') return symlogValue(v);
+	if (transform === 'symlogPr2') return symlogValue(v * distance * distance);
+	return v;
+}
+
+/**
+ * Build the heatmap matrix: rows are distance bins, columns are files.
+ * @param {Array<{ time: Date, profile: any }>} measurements
+ * @param {number[]} rowIndices
+ * @param {number[]} colIndices
+ * @param {number} binWidth
+ * @param {string} transform
+ * @returns {{ y: number[], z: Float64Array[] }}
+ */
+function computeUnfoldMatrix(measurements, rowIndices, colIndices, binWidth, transform) {
+	const cols = measurements.map((m) => m.profile.data);
+	const y = new Array(rowIndices.length);
+	const z = new Array(rowIndices.length);
+	for (let r = 0; r < rowIndices.length; r++) {
+		const j = rowIndices[r];
+		y[r] = j * binWidth;
+		const distance = (j + 0.5) * binWidth;
+		const row = new Float64Array(colIndices.length);
+		for (let c = 0; c < colIndices.length; c++) {
+			row[c] = applyUnfoldTransform(cols[colIndices[c]][j], transform, distance);
+		}
+		z[r] = row;
+	}
+	return { y, z };
+}
+
+/**
+ * Sample a large value list down to at most UNFOLD_RANGE_SAMPLES entries.
+ * @param {number[]} values
+ * @returns {Float64Array}
+ */
+function sampleFiniteValues(values) {
+	if (values.length <= UNFOLD_RANGE_SAMPLES) return Float64Array.from(values);
+	const step = Math.ceil(values.length / UNFOLD_RANGE_SAMPLES);
+	const sampled = new Float64Array(UNFOLD_RANGE_SAMPLES);
+	let idx = 0;
+	for (let i = 0; i < values.length && idx < UNFOLD_RANGE_SAMPLES; i += step) {
+		sampled[idx++] = values[i];
+	}
+	return sampled.subarray(0, idx);
+}
+
+/**
+ * Estimate the 5th–95th percentile range of the finite matrix values, or nulls
+ * when there are too few points to be meaningful.
+ * @param {Float64Array[]} z
+ * @returns {{ zMin: number | null, zMax: number | null }}
+ */
+function estimatePercentileBounds(z) {
+	const finite = [];
+	for (const row of z) {
+		for (const v of row) {
+			if (Number.isFinite(v)) finite.push(v);
+		}
+	}
+	if (finite.length < 2) return { zMin: null, zMax: null };
+
+	const sample = sampleFiniteValues(finite);
+	sample.sort();
+	const p5 = sample[Math.floor(sample.length * 0.05)];
+	const p95 = sample[Math.floor(sample.length * 0.95)];
+	if (!(p95 > p5)) return { zMin: null, zMax: null };
+	return { zMin: p5, zMax: p95 };
 }
 
 /**
@@ -549,112 +738,33 @@ export function buildUnfoldData(config) {
 	const { fileIds, channelKey, transform } = config;
 	const data = get(licelFiles);
 
-	/** @type {Array<{ time: Date, profile: any }>} */
-	const measurements = [];
-	for (const id of fileIds) {
-		const lf = data.get(id);
-		if (!lf) continue;
-		let p = null;
-		for (const cand of lf.profiles ?? []) {
-			if (
-				cand.active !== false &&
-				cand.data &&
-				cand.data.length > 0 &&
-				profileKey(cand) === channelKey
-			) {
-				p = cand;
-				break;
-			}
-		}
-		if (!p) continue;
-		measurements.push({ time: lf.measurementStartTime, profile: p });
-	}
+	const measurements = collectChannelMeasurements(data, fileIds, channelKey);
 	if (measurements.length === 0) {
 		return { error: 'Канал не найден в выбранных файлах.' };
 	}
 	measurements.sort((a, b) => a.time.getTime() - b.time.getTime());
 
-	const binWidth = measurements[0].profile.binWidth;
-	if (!(binWidth > 0)) return { error: 'Канал имеет некорректную ширину бина.' };
-	for (const m of measurements) {
-		if (!(m.profile.binWidth > 0)) return { error: 'Канал имеет некорректную ширину бина.' };
-		if (Math.abs(m.profile.binWidth - binWidth) > 1e-9 * binWidth) {
-			return { error: 'Ширина бина канала отличается между выбранными файлами.' };
-		}
-	}
+	const binWidthResult = resolveCommonBinWidth(measurements);
+	if ('error' in binWidthResult) return { error: binWidthResult.error };
+	const binWidth = binWidthResult.binWidth;
 
 	let nBins = Infinity;
-	for (const m of measurements) {
-		nBins = Math.min(nBins, m.profile.data.length);
-	}
+	for (const m of measurements) nBins = Math.min(nBins, m.profile.data.length);
 	if (!Number.isFinite(nBins) || nBins < 1) {
 		return { error: 'Канал не содержит данных.' };
 	}
 
-	const allTimes = measurements.map((m) => m.time);
-	const cols = measurements.map((m) => m.profile.data);
-
-	// Decimate rows (bins) and columns (files) uniformly to bound the grid size.
-	const rowStep = Math.max(1, Math.ceil(nBins / UNFOLD_MAX_ROWS));
-	const colStep = Math.max(1, Math.ceil(measurements.length / UNFOLD_MAX_COLS));
-	const downsampled = rowStep > 1 || colStep > 1;
-	const rowIndices = [];
-	for (let j = 0; j < nBins; j += rowStep) rowIndices.push(j);
-	const colIndices = [];
-	for (let i = 0; i < measurements.length; i += colStep) colIndices.push(i);
-	const times = colIndices.map((i) => allTimes[i]);
-
-	const y = new Array(rowIndices.length);
-	const z = new Array(rowIndices.length);
-	for (let r = 0; r < rowIndices.length; r++) {
-		const j = rowIndices[r];
-		y[r] = j * binWidth;
-		const rDist = (j + 0.5) * binWidth;
-		const row = new Float64Array(colIndices.length);
-		for (let c = 0; c < colIndices.length; c++) {
-			const v = cols[colIndices[c]][j];
-			if (transform === 'Pr2') row[c] = v * rDist * rDist;
-			else if (transform === 'symlogP') row[c] = symlogValue(v);
-			else if (transform === 'symlogPr2') row[c] = symlogValue(v * rDist * rDist);
-			else row[c] = v;
-		}
-		z[r] = row;
-	}
-
-	// Compute 5th / 95th percentile bounds for the color axis.
-	let zMin = null;
-	let zMax = null;
-	{
-		const finite = [];
-		for (const row of z) {
-			for (let c = 0; c < row.length; c++) {
-				const v = row[c];
-				if (Number.isFinite(v)) finite.push(v);
-			}
-		}
-		if (finite.length >= 2) {
-			/** @type {Float64Array} */
-			let sample;
-			if (finite.length <= UNFOLD_RANGE_SAMPLES) {
-				sample = Float64Array.from(finite);
-			} else {
-				const step = Math.ceil(finite.length / UNFOLD_RANGE_SAMPLES);
-				const sampled = new Float64Array(UNFOLD_RANGE_SAMPLES);
-				let idx = 0;
-				for (let i = 0; i < finite.length && idx < UNFOLD_RANGE_SAMPLES; i += step) {
-					sampled[idx++] = finite[i];
-				}
-				sample = sampled.subarray(0, idx);
-			}
-			sample.sort();
-			const p5 = sample[Math.floor(sample.length * 0.05)];
-			const p95 = sample[Math.floor(sample.length * 0.95)];
-			if (p95 > p5) {
-				zMin = p5;
-				zMax = p95;
-			}
-		}
-	}
+	const { indices: rowIndices, downsampled: rowsDownsampled } = decimateIndices(
+		nBins,
+		UNFOLD_MAX_ROWS
+	);
+	const { indices: colIndices, downsampled: colsDownsampled } = decimateIndices(
+		measurements.length,
+		UNFOLD_MAX_COLS
+	);
+	const times = colIndices.map((i) => measurements[i].time);
+	const { y, z } = computeUnfoldMatrix(measurements, rowIndices, colIndices, binWidth, transform);
+	const { zMin, zMax } = estimatePercentileBounds(z);
 
 	return {
 		channelLabel: profileLabel(measurements[0].profile),
@@ -665,7 +775,7 @@ export function buildUnfoldData(config) {
 		nFiles: measurements.length,
 		timeStart: times[0],
 		timeStop: times[times.length - 1],
-		downsampled,
+		downsampled: rowsDownsampled || colsDownsampled,
 		zMin,
 		zMax
 	};
@@ -685,23 +795,39 @@ export function addUnfoldWindow(config) {
 	});
 }
 
+// ---------------------------------------------------------------------------
+// Non-modal windows
+// ---------------------------------------------------------------------------
+
 /**
- * Recompute the displayed size of the given files after a data-modifying operation.
- * @param {number[]} [ids] File ids to refresh; defaults to every file.
+ * @param {string} title
+ * @param {{ x?: number, y?: number }} [position]
+ * @param {any} [payload]
  */
-function refreshFileSizes(ids) {
-	const current = get(files);
-	const data = get(licelFiles);
-	const idSet = ids ? new Set(ids) : null;
-	files.set(
-		current.map((f) => {
-			if (idSet && !idSet.has(f.id)) return f;
-			const lf = data.get(f.id);
-			if (!lf) return f;
-			return { ...f, size: formatSize(licelFileBytes(lf)) };
-		})
-	);
+export function addWindow(title, position, payload) {
+	const id = Date.now();
+	const current = get(openWindows);
+	openWindows.set([
+		...current,
+		{
+			id,
+			title,
+			x: position?.x ?? 20 + Math.random() * 100,
+			y: position?.y ?? 20 + Math.random() * 50,
+			payload
+		}
+	]);
 }
+
+/** @param {number} id */
+export function removeWindow(id) {
+	const current = get(openWindows);
+	openWindows.set(current.filter((w) => w.id !== id));
+}
+
+// ---------------------------------------------------------------------------
+// Zip export
+// ---------------------------------------------------------------------------
 
 /** @param {string} name */
 function basename(name) {
@@ -748,9 +874,7 @@ export function savePackToZip() {
 			stopTime: new Date(0),
 			zipCompressionLevel: 0
 		};
-		const bytes = savePackToZipBuffer(pack);
-		console.log('savePackToZip', { files: [...packData.keys()] });
-		return bytes;
+		return savePackToZipBuffer(pack);
 	} catch (err) {
 		const detail = err instanceof Error ? err.message : String(err);
 		showError(`Не удалось сохранить архив: ${detail}`);
@@ -758,7 +882,9 @@ export function savePackToZip() {
 	}
 }
 
-// --- Zip loading & session persistence ---
+// ---------------------------------------------------------------------------
+// Zip loading & session persistence
+// ---------------------------------------------------------------------------
 
 let nextId = 1;
 
@@ -786,7 +912,25 @@ function formatSize(bytes) {
 }
 
 /**
- * Parse a zip archive into the file list. Returns success. Shows errors in the dialog.
+ * Recompute the displayed size of the given files after a data-modifying operation.
+ * @param {number[]} [ids] File ids to refresh; defaults to every file.
+ */
+function refreshFileSizes(ids) {
+	const current = get(files);
+	const data = get(licelFiles);
+	const idSet = ids ? new Set(ids) : null;
+	files.set(
+		current.map((f) => {
+			if (idSet && !idSet.has(f.id)) return f;
+			const lf = data.get(f.id);
+			if (!lf) return f;
+			return { ...f, size: formatSize(licelFileBytes(lf)) };
+		})
+	);
+}
+
+/**
+ * Parse a zip archive into the file list. Returns success; shows errors in the dialog.
  * @param {Uint8Array} bytes
  * @param {string} label
  * @returns {boolean}
@@ -811,7 +955,6 @@ function loadPackFromZip(bytes, label) {
 		files.set(items);
 		publishLicelData(fileMap, null);
 		savedChannelSelection.set(null);
-		console.log('openFiles', { zipName: label, files: items });
 		return true;
 	} catch (err) {
 		const detail = err instanceof Error ? err.message : String(err);
@@ -901,31 +1044,4 @@ export async function restoreSession() {
 	nextId = maxId + 1;
 	files.set(items);
 	publishLicelData(fileMap, null);
-}
-
-// --- NonModalWindow actions ---
-/**
- * @param {string} title
- * @param {{ x?: number, y?: number }} [position]
- * @param {any} [payload]
- */
-export function addWindow(title, position, payload) {
-	const id = Date.now();
-	const current = get(openWindows);
-	openWindows.set([
-		...current,
-		{
-			id,
-			title,
-			x: position?.x ?? 20 + Math.random() * 100,
-			y: position?.y ?? 20 + Math.random() * 50,
-			payload
-		}
-	]);
-}
-
-/** @param {number} id */
-export function removeWindow(id) {
-	const current = get(openWindows);
-	openWindows.set(current.filter((w) => w.id !== id));
 }
