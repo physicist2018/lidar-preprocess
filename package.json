@@ -32,7 +32,7 @@
 		"vite": "^8.0.16"
 	},
 	"dependencies": {
-		"licelfile-js": "^1.1.0",
+		"licelfile-js": "^1.2.0",
 		"plotly.js-dist-min": "^4.0.0"
 	}
 }

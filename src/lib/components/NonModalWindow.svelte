@@ -806,14 +806,6 @@
 						Применить
 					</button>
 				</div>
-			{:else if title === 'Склейка каналов'}
-				<div class="text-sm text-gray-600">
-					<p>Склейка каналов...</p>
-					<div class="mt-3 h-2 overflow-hidden rounded bg-gray-100">
-						<div class="h-full rounded bg-green-500" style="width: 40%"></div>
-					</div>
-					<p class="mt-2 text-xs text-gray-400">Объединение выбранных файлов</p>
-				</div>
 			{:else if title === 'Обрезка по высоте'}
 				<div class="space-y-3">
 					<div>

@@ -8,13 +8,16 @@
 		savePackToZip,
 		addWindow,
 		addUnfoldWindow,
+		averageSelectedFiles,
 		showError
 	} from '$lib/state/store';
 	import UnfoldDialog from './UnfoldDialog.svelte';
+	import MergeChannelsDialog from './MergeChannelsDialog.svelte';
 
 	let fileItems = $state([]);
 	let fileInput = $state(null);
 	let unfoldDialogOpen = $state(false);
+	let mergeDialogOpen = $state(false);
 
 	$effect(() => {
 		const unsub = files.subscribe((val) => {
@@ -45,8 +48,15 @@
 	}
 
 	function handleMergeChannels() {
-		mergeChannels();
-		addWindow('Склейка каналов');
+		mergeDialogOpen = true;
+	}
+
+	/**
+	 * @param {{ analogKey: string, photonKey: string, h1: number, h2: number }} cfg
+	 */
+	function handleMergeApply(cfg) {
+		mergeDialogOpen = false;
+		mergeChannels(cfg);
 	}
 
 	function handleOpenFiles() {
@@ -75,6 +85,10 @@
 
 	function handleDrawUnfold() {
 		unfoldDialogOpen = true;
+	}
+
+	function handleAverageFiles() {
+		averageSelectedFiles();
 	}
 
 	/**
@@ -167,6 +181,12 @@
 		>
 			Нарисовать развертку
 		</button>
+		<button
+			onclick={handleAverageFiles}
+			class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
+		>
+			Усреднение файлов
+		</button>
 	</div>
 	<div class="my-1 border-t border-gray-200"></div>
 	<button
@@ -187,5 +207,12 @@
 	<UnfoldDialog
 		onClose={() => (unfoldDialogOpen = false)}
 		onBuild={(cfg) => handleUnfoldBuild(cfg)}
+	/>
+{/if}
+
+{#if mergeDialogOpen}
+	<MergeChannelsDialog
+		onClose={() => (mergeDialogOpen = false)}
+		onApply={(cfg) => handleMergeApply(cfg)}
 	/>
 {/if}

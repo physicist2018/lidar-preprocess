@@ -2,7 +2,9 @@ import { writable, get } from 'svelte/store';
 import {
 	newLicelPackFromZipBuffer,
 	savePackToZipBuffer,
-	loadLicelFileFromBuffer
+	loadLicelFileFromBuffer,
+	glueToAnalog,
+	glueToPhoton
 } from 'licelfile-js';
 import { saveSession, loadSession } from './persistence';
 
@@ -169,6 +171,71 @@ function profileLabel(p) {
 		p.deviceID === 'BC' ? 'фотон' : p.deviceID === 'BT' ? 'аналог' : p.deviceID || 'канал';
 	const pol = p.polarization ? ` (${p.polarization})` : '';
 	return `${p.wavelength || '?'} нм${pol} · ${mode}`;
+}
+
+/**
+ * Whether two channels share the same axis: identical wavelength and
+ * polarization. Uses exact equality to match licel-js `selectProfile`, which
+ * pairs analog/photon channels by strict wavelength and polarization.
+ * @param {{ wavelength: number, polarization: string }} a
+ * @param {{ wavelength: number, polarization: string }} b
+ */
+export function sameChannelAxis(a, b) {
+	return a.wavelength === b.wavelength && a.polarization === b.polarization;
+}
+
+/**
+ * Collect distinct channels present in the given files, grouped by a
+ * classifier. Each channel is keyed by `profileKey`; lists are sorted by
+ * wavelength, device and polarization. Shared by the graph/unfold channel
+ * picker and the merge dialog so their channel lists cannot drift apart.
+ * @param {number[]} fileIds
+ * @param {(p: any) => string} [classify] group name; empty string skips the profile
+ * @returns {Map<string, Array<{ key: string, label: string, fileCount: number, wavelength: number, deviceID: string, polarization: string }>>}
+ */
+function collectDistinctChannels(fileIds, classify = () => 'all') {
+	const data = get(licelFiles);
+	/** @type {Map<string, Map<string, any>>} */
+	const groups = new Map();
+
+	forEachProfile(data, fileIds, (p) => {
+		const group = classify(p);
+		if (!group) return;
+		let found = groups.get(group);
+		if (!found) {
+			found = new Map();
+			groups.set(group, found);
+		}
+		const key = profileKey(p);
+		const entry = found.get(key);
+		if (entry) {
+			entry.fileCount++;
+		} else {
+			found.set(key, {
+				key,
+				label: profileLabel(p),
+				fileCount: 1,
+				wavelength: p.wavelength,
+				deviceID: p.deviceID,
+				polarization: p.polarization
+			});
+		}
+	});
+
+	/** @type {Map<string, Array<any>>} */
+	const result = new Map();
+	for (const [group, found] of groups) {
+		result.set(
+			group,
+			[...found.values()].sort(
+				(a, b) =>
+					Number(a.wavelength) - Number(b.wavelength) ||
+					a.deviceID.localeCompare(b.deviceID) ||
+					a.polarization.localeCompare(b.polarization)
+			)
+		);
+	}
+	return result;
 }
 
 /** @param {Float64Array} values */
@@ -483,8 +550,192 @@ export async function medianFiltering(windowSize) {
 	await persistSession();
 }
 
-export function mergeChannels() {
-	// TODO: implement
+// ---------------------------------------------------------------------------
+// Channel merge (glue)
+// ---------------------------------------------------------------------------
+
+/**
+ * List distinct analog (BT) and photon (BC) channels present in the given
+ * files, each with the number of files that contain it. Glued channels are
+ * excluded; labels and pairing follow the graph window convention.
+ * @param {number[]} fileIds
+ * @returns {{ analog: Array<{ key: string, label: string, fileCount: number, wavelength: number, deviceID: string, polarization: string }>, photon: Array<{ key: string, label: string, fileCount: number, wavelength: number, deviceID: string, polarization: string }> }}
+ */
+export function listMergeChannels(fileIds) {
+	const groups = collectDistinctChannels(fileIds, (p) =>
+		p.deviceID === 'BT' ? 'analog' : p.deviceID === 'BC' ? 'photon' : ''
+	);
+	return { analog: groups.get('analog') ?? [], photon: groups.get('photon') ?? [] };
+}
+
+/**
+ * Find the single usable profile of a file whose channel key matches. Returns
+ * a status: absent (`missing`) or several matches with the same key
+ * (`ambiguous`). Inactive/data-less profiles are ignored, consistently with the
+ * channel listings.
+ * @param {any} lf
+ * @param {string} key
+ * @returns {{ profile: any } | { missing: true } | { ambiguous: true }}
+ */
+function findChannelProfile(lf, key) {
+	const matches = (lf.profiles ?? []).filter(
+		/** @param {any} p */ (p) => isProfileUsable(p) && profileKey(p) === key
+	);
+	if (matches.length === 0) return { missing: true };
+	if (matches.length > 1) return { ambiguous: true };
+	return { profile: matches[0] };
+}
+
+/**
+ * Mirror of the licel-js `selectProfile` routine: first non-glued profile of
+ * the requested mode/wavelength whose polarization matches, where an empty
+ * polarization acts as a wildcard. Used to confirm that `glue` will operate on
+ * the exact validated profiles rather than an unintended same-wavelength one.
+ * @param {any} lf
+ * @param {boolean} isPhotonMode
+ * @param {number} wavelength
+ * @param {string} polarization
+ * @returns {any}
+ */
+function selectableProfile(lf, isPhotonMode, wavelength, polarization) {
+	for (const p of lf.profiles ?? []) {
+		if (p.deviceID === 'BG') continue;
+		if ((p.deviceID === 'BC') !== isPhotonMode) continue;
+		if (p.wavelength !== wavelength) continue;
+		if (polarization === '' || p.polarization === polarization) return p;
+	}
+	return null;
+}
+
+/**
+ * Glue the selected analog and photon channels in every open file. For each
+ * file the analog/photon channels are paired by wavelength and polarization
+ * and combined with the licel-js `glueToAnalog` or `glueToPhoton` routine.
+ * The resulting profile replaces an existing profile of the same type (BT for
+ * analog target, BC for photon target) with the same wavelength/polarization,
+ * or is appended. Files missing either channel (or where gluing fails) are
+ * skipped and reported. Only the files actually modified are published.
+ * @param {{ analogKey?: string, photonKey?: string, h1?: number, h2?: number, target?: 'analog' | 'photon' }} [params]
+ */
+export async function mergeChannels(params = {}) {
+	const { analogKey = '', photonKey = '', h1 = NaN, h2 = NaN, target = 'analog' } = params;
+
+	if (!analogKey || !photonKey) {
+		showError('Выберите аналоговый и фотонный каналы.');
+		return;
+	}
+	if (!Number.isFinite(h1) || !Number.isFinite(h2) || h1 < 0 || h1 >= h2) {
+		showError('Укажите корректный диапазон высот: начало должно быть не меньше 0 и меньше конца.');
+		return;
+	}
+
+	const current = get(files);
+	/** @type {Map<number, string>} */
+	const fileNames = new Map(current.map((f) => [f.id, f.name]));
+	const channels = listMergeChannels([...fileNames.keys()]);
+	const analog = channels.analog.find((c) => c.key === analogKey);
+	const photon = channels.photon.find((c) => c.key === photonKey);
+	if (!analog) {
+		showError('Выбранный аналоговый канал не найден.');
+		return;
+	}
+	if (!photon) {
+		showError('Выбранный фотонный канал не найден.');
+		return;
+	}
+	if (!sameChannelAxis(analog, photon)) {
+		showError('Аналоговый и фотонный каналы должны совпадать по длине волны и поляризации.');
+		return;
+	}
+
+	const glueFn = target === 'analog' ? glueToAnalog : glueToPhoton;
+	const targetDevice = target === 'analog' ? 'BT' : 'BC';
+
+	const data = get(licelFiles);
+	/** @type {number[]} */
+	const touched = [];
+	/** @type {string[]} */
+	const skipped = [];
+
+	for (const id of fileNames.keys()) {
+		const lf = data.get(id);
+		if (!lf) continue;
+		const fileName = fileNames.get(id) ?? `#${id}`;
+
+		const analogResult = findChannelProfile(lf, analogKey);
+		const photonResult = findChannelProfile(lf, photonKey);
+		if ('missing' in analogResult || 'missing' in photonResult) {
+			skipped.push(fileName);
+			continue;
+		}
+		if ('ambiguous' in analogResult || 'ambiguous' in photonResult) {
+			skipped.push(fileName);
+			continue;
+		}
+		const analogProfile = analogResult.profile;
+		const photonProfile = photonResult.profile;
+
+		const widthScale = Math.max(Math.abs(analogProfile.binWidth), Math.abs(photonProfile.binWidth));
+		if (
+			!(analogProfile.binWidth > 0) ||
+			Math.abs(analogProfile.binWidth - photonProfile.binWidth) > 1e-6 * widthScale
+		) {
+			skipped.push(fileName);
+			continue;
+		}
+
+		// The glue functions internally use `selectProfile` (same as old `glue`),
+		// which treats an empty polarization as a wildcard. Confirm selection.
+		if (
+			selectableProfile(lf, false, analog.wavelength, analog.polarization) !== analogProfile ||
+			selectableProfile(lf, true, analog.wavelength, analog.polarization) !== photonProfile
+		) {
+			skipped.push(fileName);
+			continue;
+		}
+
+		/** @type {any} */
+		let glued;
+		try {
+			glued = glueFn(lf, analog.wavelength, h1, h2, analog.polarization);
+		} catch {
+			skipped.push(fileName);
+			continue;
+		}
+
+		const profiles = lf.profiles ?? [];
+		const existingIdx = profiles.findIndex(
+			/** @param {any} p */
+			(p) => p.deviceID === targetDevice && sameChannelAxis(p, analog)
+		);
+		if (existingIdx >= 0) {
+			profiles[existingIdx] = glued;
+		} else {
+			profiles.push(glued);
+		}
+		lf.profiles = profiles;
+		lf.nDatasets = profiles.length;
+		touched.push(id);
+	}
+
+	if (touched.length === 0) {
+		showError(
+			skipped.length > 0
+				? `Склейка не выполнена: ни в одном файле нет обоих выбранных каналов. Пропущено файлов: ${skipped.length}.`
+				: 'Склейка не выполнена: нет файлов с данными.'
+		);
+		return;
+	}
+
+	publishLicelData(new Map(data), touched);
+	refreshFileSizes(touched);
+	await persistSession();
+
+	if (skipped.length > 0) {
+		showError(
+			`Склейка выполнена, но ${skipped.length} файл(ов) пропущено (нет каналов или диапазон вне данных):\n${skipped.join('\n')}`
+		);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -528,6 +779,164 @@ export async function cropByHeight(maxHeight) {
 }
 
 // ---------------------------------------------------------------------------
+// File averaging
+// ---------------------------------------------------------------------------
+
+/**
+ * Largest "average_N" suffix among the given file names, or 0 when none exist.
+ * @param {Array<{ name: string }>} items
+ */
+function maxAverageIndex(items) {
+	let max = 0;
+	for (const f of items) {
+		const m = /^average_(\d+)$/.exec(f.name);
+		if (m) max = Math.max(max, Number(m[1]));
+	}
+	return max;
+}
+
+/**
+ * Average every selected file into a new file "average_{idx}". Channels are
+ * paired by wavelength, polarization and device mode; every selected file must
+ * contain the channel with a matching bin width, otherwise the operation is
+ * aborted. The new file keeps the metadata of the first selected file, with
+ * measurementStartTime set to the earliest start, measurementStopTime to the
+ * latest stop, laser1NShots summed over the selected files and each channel's
+ * nShots summed over the selected files containing it. Profiles are averaged
+ * element-wise over the shortest channel.
+ */
+export async function averageSelectedFiles() {
+	const selected = getSelectedFileIds();
+	if (!selected) return;
+	if (selected.length < 2) {
+		showError('Для усреднения нужно минимум 2 файла.');
+		return;
+	}
+
+	const data = get(licelFiles);
+	/** @type {Map<number, string>} */
+	const fileNames = new Map(get(files).map((f) => [f.id, f.name]));
+
+	/** @type {Array<{ id: number, lf: any, channels: Map<string, any> }>} */
+	const entries = [];
+	for (const id of selected) {
+		const lf = data.get(id);
+		if (!lf) continue;
+		/** @type {Map<string, any>} */
+		const channels = new Map();
+		for (const p of lf.profiles ?? []) {
+			if (!isProfileUsable(p)) continue;
+			const key = profileKey(p);
+			if (!channels.has(key)) channels.set(key, p);
+		}
+		entries.push({ id, lf, channels });
+	}
+	if (entries.length < 2) {
+		showError('Для усреднения нужно минимум 2 файла с данными.');
+		return;
+	}
+
+	// Group every channel found in the first file across all selected files;
+	// abort when a channel or a matching bin width is missing somewhere.
+	/** @type {Map<string, any[]>} */
+	const groups = new Map();
+	const firstChannels = entries[0].channels;
+	if (firstChannels.size === 0) {
+		showError('В выбранных файлах нет каналов с данными.');
+		return;
+	}
+	for (const [key, firstProfile] of firstChannels) {
+		/** @type {any[]} */
+		const profiles = [];
+		for (let i = 0; i < entries.length; i++) {
+			const p = entries[i].channels.get(key);
+			if (!p) {
+				showError(
+					`Канал ${profileLabel(firstProfile)} отсутствует в файле "${fileNames.get(entries[i].id) ?? `#${entries[i].id}`}".`
+				);
+				return;
+			}
+			profiles.push(p);
+		}
+		groups.set(key, profiles);
+	}
+	for (const profiles of groups.values()) {
+		const width = profiles[0].binWidth;
+		if (!(width > 0)) {
+			showError(`Канал ${profileLabel(profiles[0])} имеет некорректную ширину бина.`);
+			return;
+		}
+		for (const p of profiles) {
+			if (Math.abs(p.binWidth - width) > 1e-9 * width) {
+				showError(`Ширина бина канала ${profileLabel(p)} отличается между выбранными файлами.`);
+				return;
+			}
+		}
+	}
+
+	// Build the averaged file from the first file's metadata.
+	/** @type {any} */
+	const source = entries[0].lf;
+	let start = source.measurementStartTime;
+	let stop = source.measurementStopTime;
+	let laser1NShots = Number(source.laser1NShots) || 0;
+	for (const entry of entries.slice(1)) {
+		const s = entry.lf.measurementStartTime;
+		const t = entry.lf.measurementStopTime;
+		if (s instanceof Date && Number.isFinite(s.getTime()) && s < start) start = s;
+		if (t instanceof Date && Number.isFinite(t.getTime()) && t > stop) stop = t;
+		laser1NShots += Number(entry.lf.laser1NShots) || 0;
+	}
+
+	/** @type {any[]} */
+	const profiles = [];
+	for (const group of groups.values()) {
+		const base = group[0];
+		let nShots = 0;
+		let length = Infinity;
+		for (const p of group) {
+			nShots += Number(p.nShots) || 0;
+			length = Math.min(length, p.data.length);
+		}
+		const averaged = new Float64Array(length);
+		for (let j = 0; j < length; j++) {
+			let sum = 0;
+			for (const p of group) sum += p.data[j];
+			averaged[j] = sum / group.length;
+		}
+		profiles.push({
+			...base,
+			nShots,
+			nDataPoints: length,
+			data: averaged
+		});
+	}
+
+	/** @type {any} */
+	const averagedFile = {
+		...source,
+		measurementStartTime: start,
+		measurementStopTime: stop,
+		laser1NShots,
+		nDatasets: profiles.length,
+		profiles
+	};
+
+	const idx = maxAverageIndex(get(files)) + 1;
+	const id = nextId++;
+	const name = `average_${idx}`;
+
+	files.set([
+		...get(files),
+		{ id, name, size: formatSize(licelFileBytes(averagedFile)), selected: false }
+	]);
+	const nextData = new Map(data);
+	nextData.set(id, averagedFile);
+	publishLicelData(nextData, [id]);
+	await persistSession();
+}
+
+// ---------------------------------------------------------------------------
 // Unfold (heatmap) support
 // ---------------------------------------------------------------------------
 
@@ -567,32 +976,7 @@ export function unfoldTransformById(id) {
  * @returns {Array<{ key: string, label: string, fileCount: number, wavelength: number, deviceID: string, polarization: string }>}
  */
 export function listUnfoldChannels(fileIds) {
-	const data = get(licelFiles);
-	/** @type {Map<string, { key: string, label: string, fileCount: number, wavelength: number, deviceID: string, polarization: string }>} */
-	const found = new Map();
-	forEachProfile(data, fileIds, (p) => {
-		const key = profileKey(p);
-		const entry = found.get(key);
-		if (entry) {
-			entry.fileCount++;
-		} else {
-			found.set(key, {
-				key,
-				label: profileLabel(p),
-				fileCount: 1,
-				wavelength: p.wavelength,
-				deviceID: p.deviceID,
-				polarization: p.polarization
-			});
-		}
-	});
-	return [...found.values()].sort((a, b) => {
-		return (
-			Number(a.wavelength) - Number(b.wavelength) ||
-			a.deviceID.localeCompare(b.deviceID) ||
-			a.polarization.localeCompare(b.polarization)
-		);
-	});
+	return collectDistinctChannels(fileIds).get('all') ?? [];
 }
 
 /**

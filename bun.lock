@@ -5,7 +5,7 @@
     "": {
       "name": "lidar-sveltekit",
       "dependencies": {
-        "licelfile-js": "^1.1.0",
+        "licelfile-js": "^1.2.0",
         "plotly.js-dist-min": "^4.0.0",
       },
       "devDependencies": {
@@ -163,7 +163,7 @@
 
     "kleur": ["kleur@4.1.5", "", {}, "sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ=="],
 
-    "licelfile-js": ["licelfile-js@1.1.0", "", { "dependencies": { "fflate": "^0.8.3" } }, "sha512-Ds8ObGWxNWvCQacFqUWpzL6eGRLHGfHdCXjnNF26NSB/XXdwHKySmzbwBwOsuwc7hTShzK8a7Rhv1heYKam4fA=="],
+    "licelfile-js": ["licelfile-js@1.2.0", "", { "dependencies": { "fflate": "^0.8.3" } }, "sha512-reZj+lSOzn30gZ6YsZi84aLN18AcO2bUrTxUA4/O/SNbyT7mfUeKCNANuOJm3fETBIgTrKyl0/UTqAFRY6eN5Q=="],
 
     "lightningcss": ["lightningcss@1.33.0", "", { "dependencies": { "detect-libc": "^2.0.3" }, "optionalDependencies": { "lightningcss-android-arm64": "1.33.0", "lightningcss-darwin-arm64": "1.33.0", "lightningcss-darwin-x64": "1.33.0", "lightningcss-freebsd-x64": "1.33.0", "lightningcss-linux-arm-gnueabihf": "1.33.0", "lightningcss-linux-arm64-gnu": "1.33.0", "lightningcss-linux-arm64-musl": "1.33.0", "lightningcss-linux-x64-gnu": "1.33.0", "lightningcss-linux-x64-musl": "1.33.0", "lightningcss-win32-arm64-msvc": "1.33.0", "lightningcss-win32-x64-msvc": "1.33.0" } }, "sha512-WkUDrojuJs0xkgGf2udWxa3yGBRxPtxUkB79i6aCZLRgc7PM8fZe9TosfPDcvEpQZbuFASnHYmRLBLUbmLOIIA=="],
 
