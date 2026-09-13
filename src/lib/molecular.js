@@ -191,3 +191,37 @@ export function anchorMolecular({ measured, raw, zGrid, zMin, zMax }) {
 	}
 	return { k: count > 0 ? sum / count : NaN, count };
 }
+
+/**
+ * Resample a profile given on a uniform height grid with step `srcDz` (m) onto
+ * a uniform grid with step `dstDz` (m), using linear interpolation over
+ * physical height. Heights beyond the source coverage are clamped to the top
+ * value, mirroring the nearest-value clamping of `interpolateOnGrid`. Used to
+ * keep the molecular overlay aligned with the measured signal when the zenith
+ * angle changed after anchoring.
+ * @param {ArrayLike<number>} values
+ * @param {number} srcDz
+ * @param {number} dstDz
+ * @returns {Float64Array}
+ */
+export function resampleMolecular(values, srcDz, dstDz) {
+	const n = values.length;
+	/** @type {Float64Array} */
+	const out = new Float64Array(n);
+	if (!(srcDz > 0) || !(dstDz > 0)) {
+		out.fill(NaN);
+		return out;
+	}
+	for (let j = 0; j < n; j++) {
+		const pos = (j * dstDz) / srcDz;
+		if (pos >= n - 1) {
+			out[j] = values[n - 1];
+			continue;
+		}
+		const i0 = Math.floor(pos);
+		const i1 = i0 + 1;
+		const frac = pos - i0;
+		out[j] = values[i0] * (1 - frac) + values[i1] * frac;
+	}
+	return out;
+}

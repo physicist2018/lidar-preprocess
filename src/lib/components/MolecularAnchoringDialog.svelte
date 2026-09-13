@@ -1,5 +1,5 @@
 <script>
-	import { files } from '$lib/state/store';
+	import { files, molecularState } from '$lib/state/store';
 	import { parseMeteoFile } from '$lib/molecular';
 	import { get } from 'svelte/store';
 
@@ -15,6 +15,20 @@
 	let zMinInput = $state('');
 	let zMaxInput = $state('');
 	let lastToken = 0;
+	let restored = $state(false);
+
+	// Prefill from the last molecular anchoring run (current or previous session).
+	{
+		const saved = get(molecularState);
+		if (saved.meteo) {
+			meteo = saved.meteo;
+			selectedName = saved.sourceName;
+			meteoRange = `${saved.meteo.heights[0].toFixed(0)} — ${saved.meteo.heights[saved.meteo.heights.length - 1].toFixed(0)} м`;
+			zMinInput = String(saved.zMin);
+			zMaxInput = String(saved.zMax);
+			restored = true;
+		}
+	}
 
 	$effect(() => {
 		const unsub = files.subscribe((val) => {
@@ -33,6 +47,7 @@
 		parseError = '';
 		meteo = null;
 		meteoRange = '';
+		restored = false;
 		parsePending = true;
 		selectedName = file.name;
 		file
@@ -127,6 +142,11 @@
 					{:else if parseError}
 						<p class="mt-1 text-xs break-words text-red-600">{parseError}</p>
 					{:else if meteo}
+						{#if restored}
+							<p class="mt-1 text-xs text-gray-600">
+								Профили восстановлены из предыдущей сессии {selectedName ? `· ${selectedName}` : ''}
+							</p>
+						{/if}
 						<p class="mt-1 text-xs text-gray-600">
 							Профили: P, H, T · {meteo.nRows} строк · высоты {meteoRange}
 						</p>

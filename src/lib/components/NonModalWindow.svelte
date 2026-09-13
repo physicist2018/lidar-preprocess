@@ -23,11 +23,12 @@
 		zenithAngle
 	} from '$lib/state/store';
 	import { get } from 'svelte/store';
+	import { resampleMolecular } from '$lib/molecular';
 	import { onMount, onDestroy } from 'svelte';
 
 	/** @typedef {import('licelfile-js').LicelFile} LicelFile */
 	/** @typedef {import('licelfile-js').LicelProfile} LicelProfile */
-	/** @typedef {import('licelfile-js').LicelProfile & { molecular?: { data: ArrayLike<number> } }} ProfileWithMolecular */
+	/** @typedef {import('licelfile-js').LicelProfile & { molecular?: { data: ArrayLike<number>, zenithDeg?: number } }} ProfileWithMolecular */
 
 	const channelPalette = [
 		'#3b82f6', // blue
@@ -120,10 +121,27 @@
 				if (p.molecular && p.molecular.data) {
 					const molecular = p.molecular.data;
 					const n = Math.min(molecular.length, data.length);
+					// The stored profile lives on the height grid of the anchoring
+					// zenith (z = j * binWidth * cos(zenithDeg)); when the current
+					// zenith differs, resample it onto the current grid so the
+					// overlay stays aligned with the measured signal.
+					const anchorZenithDeg =
+						typeof p.molecular.zenithDeg === 'number' ? p.molecular.zenithDeg : get(zenithAngle);
+					const anchorDz = binWidth * Math.cos((anchorZenithDeg * Math.PI) / 180);
+					const currentDz = binWidth * cosAlpha;
+					const values =
+						Math.abs(anchorDz - currentDz) <= 1e-6 * Math.max(anchorDz, currentDz)
+							? molecular
+							: resampleMolecular(molecular, anchorDz, currentDz);
 					molecularPoints = new Array(n);
+					let count = 0;
 					for (let j = 0; j < n; j++) {
-						molecularPoints[j] = { x: j * binWidth * cosAlpha, y: molecular[j] };
+						const y = values[j];
+						if (!Number.isFinite(y)) continue;
+						molecularPoints[count++] = { x: j * binWidth * cosAlpha, y };
 					}
+					if (count === 0) molecularPoints = null;
+					else if (count < n) molecularPoints = molecularPoints.slice(0, count);
 				}
 				const mode =
 					p.deviceID === 'BC' ? 'фотон' : p.deviceID === 'BT' ? 'аналог' : p.deviceID || 'канал';

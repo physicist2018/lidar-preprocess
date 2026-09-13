@@ -83,6 +83,21 @@ export function rememberChannelSelection(states) {
  */
 export const zenithAngle = writable(0);
 
+/**
+ * State of the last molecular anchoring run: the parsed meteo profiles, the
+ * source file name and the anchoring height window. Persisted with the session
+ * so the dialog can be prefilled and the anchoring re-applied without
+ * re-selecting the meteo file.
+ */
+export const molecularState = writable(
+	/** @type {{ meteo: any | null, sourceName: string, zMin: number, zMax: number }} */ ({
+		meteo: null,
+		sourceName: '',
+		zMin: 0,
+		zMax: 0
+	})
+);
+
 // ---------------------------------------------------------------------------
 // Error dialog
 // ---------------------------------------------------------------------------
@@ -928,6 +943,7 @@ export async function applyMolecularAnchoring(params = {}) {
 	if (computeOk === false || anchors.length === 0) return;
 	for (const a of anchors) a.profile.molecular = a.molecular;
 
+	molecularState.set({ meteo, sourceName, zMin: zMinValue, zMax: zMaxValue });
 	publishLicelData(new Map(data), selected);
 	refreshFileSizes(selected);
 	await persistSession();
@@ -1574,7 +1590,12 @@ export async function persistSession() {
 	}
 
 	try {
-		await saveSession({ version: 2, zenithAngle: get(zenithAngle), rows });
+		await saveSession({
+			version: 2,
+			zenithAngle: get(zenithAngle),
+			molecular: get(molecularState),
+			rows
+		});
 	} catch (err) {
 		const detail = err instanceof Error ? err.message : String(err);
 		showError(`Не удалось сохранить данные в браузере: ${detail}`);
@@ -1621,6 +1642,38 @@ export async function restoreSession() {
 	const angle = snapshot.zenithAngle;
 	if (Number.isFinite(angle) && angle >= 0 && angle <= 80 && angle !== get(zenithAngle))
 		zenithAngle.set(angle);
+	restoreMolecularState(snapshot.molecular);
 	files.set(items);
 	publishLicelData(fileMap, null);
+}
+
+/** @param {any} x */
+function isNumericProfile(x) {
+	return x && (Array.isArray(x) || ArrayBuffer.isView(x));
+}
+
+/**
+ * Restore the molecular anchoring state ({meteo, sourceName, zMin, zMax}) from
+ * a persisted session snapshot. Silently ignores malformed records so old
+ * sessions without the field keep working unchanged.
+ * @param {any} state
+ */
+function restoreMolecularState(state) {
+	if (!state || typeof state !== 'object') return;
+	const meteo = state.meteo;
+	const isFlatProfile =
+		meteo &&
+		isNumericProfile(meteo.heights) &&
+		isNumericProfile(meteo.press) &&
+		isNumericProfile(meteo.temp) &&
+		meteo.heights.length >= 2 &&
+		meteo.heights.length === meteo.press.length &&
+		meteo.press.length === meteo.temp.length;
+	if (!isFlatProfile) return;
+	molecularState.set({
+		meteo,
+		sourceName: typeof state.sourceName === 'string' ? state.sourceName : '',
+		zMin: typeof state.zMin === 'number' && Number.isFinite(state.zMin) ? state.zMin : 0,
+		zMax: typeof state.zMax === 'number' && Number.isFinite(state.zMax) ? state.zMax : 0
+	});
 }
