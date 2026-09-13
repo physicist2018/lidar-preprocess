@@ -9,15 +9,18 @@
 		addWindow,
 		addUnfoldWindow,
 		averageSelectedFiles,
+		setZenithAngle,
 		showError
 	} from '$lib/state/store';
 	import UnfoldDialog from './UnfoldDialog.svelte';
 	import MergeChannelsDialog from './MergeChannelsDialog.svelte';
+	import ZenithAngleDialog from './ZenithAngleDialog.svelte';
 
 	let fileItems = $state([]);
 	let fileInput = $state(null);
 	let unfoldDialogOpen = $state(false);
 	let mergeDialogOpen = $state(false);
+	let zenithDialogOpen = $state(false);
 
 	$effect(() => {
 		const unsub = files.subscribe((val) => {
@@ -85,6 +88,18 @@
 
 	function handleDrawUnfold() {
 		unfoldDialogOpen = true;
+	}
+
+	function handleZenithAngle() {
+		zenithDialogOpen = true;
+	}
+
+	/**
+	 * @param {number} alpha
+	 */
+	function handleZenithApply(alpha) {
+		zenithDialogOpen = false;
+		setZenithAngle(alpha);
 	}
 
 	function handleAverageFiles() {
@@ -176,6 +191,12 @@
 			Обрезать по высоте
 		</button>
 		<button
+			onclick={handleZenithAngle}
+			class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
+		>
+			Задать зенитный угол лидара
+		</button>
+		<button
 			onclick={handleDrawUnfold}
 			class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
 		>
@@ -214,5 +235,12 @@
 	<MergeChannelsDialog
 		onClose={() => (mergeDialogOpen = false)}
 		onApply={(cfg) => handleMergeApply(cfg)}
+	/>
+{/if}
+
+{#if zenithDialogOpen}
+	<ZenithAngleDialog
+		onClose={() => (zenithDialogOpen = false)}
+		onApply={(alpha) => handleZenithApply(alpha)}
 	/>
 {/if}

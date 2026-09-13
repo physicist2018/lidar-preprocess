@@ -75,6 +75,13 @@ export function rememberChannelSelection(states) {
 	savedChannelSelection.set({ ...states });
 }
 
+/**
+ * Zenith angle (degrees) applied to the working dataset. Graph windows derive
+ * their height axis as z = r · cos(alpha) from the pristine distances of every
+ * channel, so this single value keeps all windows consistent.
+ */
+export const zenithAngle = writable(0);
+
 // ---------------------------------------------------------------------------
 // Error dialog
 // ---------------------------------------------------------------------------
@@ -779,6 +786,34 @@ export async function cropByHeight(maxHeight) {
 }
 
 // ---------------------------------------------------------------------------
+// Zenith angle
+// ---------------------------------------------------------------------------
+
+/**
+ * Apply a new zenith angle (degrees) to the whole dataset: graph and unfold
+ * windows derive their height axis as z = r · cos(alpha) from the pristine
+ * distances (j · binWidth), so changing the angle never accumulates on
+ * previous recomputations. Values outside [0, 80] are rejected; without loaded
+ * files the angle cannot be applied.
+ * @param {number} alphaDeg
+ * @returns {Promise<boolean>}
+ */
+export async function setZenithAngle(alphaDeg) {
+	if (!Number.isFinite(alphaDeg) || alphaDeg < 0 || alphaDeg > 80) {
+		showError('Зенитный угол должен быть числом от 0 до 80 градусов.');
+		return false;
+	}
+	if (get(files).length === 0) {
+		showError('Нет загруженных файлов. Сначала откройте данные.');
+		return false;
+	}
+	if (alphaDeg === get(zenithAngle)) return true;
+	zenithAngle.set(alphaDeg);
+	await persistSession();
+	return true;
+}
+
+// ---------------------------------------------------------------------------
 // File averaging
 // ---------------------------------------------------------------------------
 
@@ -1045,21 +1080,22 @@ function applyUnfoldTransform(v, transform, distance) {
 }
 
 /**
- * Build the heatmap matrix: rows are distance bins, columns are files.
+ * Build the heatmap matrix: rows are height bins, columns are files.
  * @param {Array<{ time: Date, profile: any }>} measurements
  * @param {number[]} rowIndices
  * @param {number[]} colIndices
  * @param {number} binWidth
  * @param {string} transform
+ * @param {number} zFactor cos(zenith angle) applied to the height axis
  * @returns {{ y: number[], z: Float64Array[] }}
  */
-function computeUnfoldMatrix(measurements, rowIndices, colIndices, binWidth, transform) {
+function computeUnfoldMatrix(measurements, rowIndices, colIndices, binWidth, transform, zFactor) {
 	const cols = measurements.map((m) => m.profile.data);
 	const y = new Array(rowIndices.length);
 	const z = new Array(rowIndices.length);
 	for (let r = 0; r < rowIndices.length; r++) {
 		const j = rowIndices[r];
-		y[r] = j * binWidth;
+		y[r] = j * binWidth * zFactor;
 		const distance = (j + 0.5) * binWidth;
 		const row = new Float64Array(colIndices.length);
 		for (let c = 0; c < colIndices.length; c++) {
@@ -1147,7 +1183,15 @@ export function buildUnfoldData(config) {
 		UNFOLD_MAX_COLS
 	);
 	const times = colIndices.map((i) => measurements[i].time);
-	const { y, z } = computeUnfoldMatrix(measurements, rowIndices, colIndices, binWidth, transform);
+	const alphaRad = (get(zenithAngle) * Math.PI) / 180;
+	const { y, z } = computeUnfoldMatrix(
+		measurements,
+		rowIndices,
+		colIndices,
+		binWidth,
+		transform,
+		Math.cos(alphaRad)
+	);
 	const { zMin, zMax } = estimatePercentileBounds(z);
 
 	return {
@@ -1382,7 +1426,7 @@ export async function persistSession() {
 	}
 
 	try {
-		await saveSession({ version: 1, rows });
+		await saveSession({ version: 2, zenithAngle: get(zenithAngle), rows });
 	} catch (err) {
 		const detail = err instanceof Error ? err.message : String(err);
 		showError(`Не удалось сохранить данные в браузере: ${detail}`);
@@ -1426,6 +1470,9 @@ export async function restoreSession() {
 	}
 
 	nextId = maxId + 1;
+	const angle = snapshot.zenithAngle;
+	if (Number.isFinite(angle) && angle >= 0 && angle <= 80 && angle !== get(zenithAngle))
+		zenithAngle.set(angle);
 	files.set(items);
 	publishLicelData(fileMap, null);
 }

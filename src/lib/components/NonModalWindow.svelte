@@ -19,7 +19,8 @@
 		licelDataTouched,
 		buildUnfoldData,
 		savedChannelSelection,
-		rememberChannelSelection
+		rememberChannelSelection,
+		zenithAngle
 	} from '$lib/state/store';
 	import { get } from 'svelte/store';
 	import { onMount, onDestroy } from 'svelte';
@@ -73,6 +74,8 @@
 	let channels = [];
 	// Y axis scale of the graph window: 'linear' | 'log'
 	let yScale = $state('linear');
+	// Zenith angle whose height extent is currently refit into the x axis range.
+	let chartAlpha = /** @type {number | null} */ (null);
 
 	// Extract filename from title "График: filename" and resolve the data source
 	// from the current working dataset (licelFiles, keyed by file id via window payload).
@@ -101,12 +104,14 @@
 
 	/** @param {LicelFile} lf */
 	function profilesToChannels(lf) {
+		const alphaRad = (get(zenithAngle) * Math.PI) / 180;
+		const cosAlpha = Math.cos(alphaRad);
 		return (lf.profiles ?? [])
 			.filter((p) => p.active !== false)
 			.map((p, i) => {
 				const binWidth = p.binWidth > 0 ? p.binWidth : 1;
 				const data = p.data ? Array.from(p.data) : [];
-				const points = data.map((y, j) => ({ x: j * binWidth, y }));
+				const points = data.map((y, j) => ({ x: j * binWidth * cosAlpha, y }));
 				const mode =
 					p.deviceID === 'BC' ? 'фотон' : p.deviceID === 'BT' ? 'аналог' : p.deviceID || 'канал';
 				const pol = p.polarization ? ` (${p.polarization})` : '';
@@ -163,8 +168,23 @@
 	// $effect) so that state writes here cannot re-trigger the effect.
 	/** @type {(() => void) | null} */
 	let datasetUnsub = null;
+	/** @type {(() => void) | null} */
+	let angleUnsub = null;
 
 	onMount(() => {
+		// Redraw whenever the zenith angle changes: graph windows re-derive the
+		// height axis from the pristine distances, unfold windows rebuild the
+		// heatmap with the new height rows.
+		angleUnsub = zenithAngle.subscribe(() => {
+			if (isUnfoldWindow) {
+				if (unfoldConfig) scheduleUnfoldUpdate();
+				return;
+			}
+			if (title.startsWith('График: ') && licel) {
+				channels = profilesToChannels(licel);
+				updateChart();
+			}
+		});
 		if (isUnfoldWindow) {
 			initUnfoldChart();
 			if (unfoldConfig) {
@@ -200,6 +220,10 @@
 	});
 
 	onDestroy(() => {
+		if (angleUnsub) {
+			angleUnsub();
+			angleUnsub = null;
+		}
 		if (datasetUnsub) {
 			datasetUnsub();
 			datasetUnsub = null;
@@ -253,7 +277,7 @@
 
 			const layout = {
 				xaxis: {
-					title: { text: 'Дистанция, м' },
+					title: { text: 'Высота, м' },
 					range: xRange,
 					zeroline: false,
 					automargin: true
@@ -306,7 +330,23 @@
 	function updateChart() {
 		if (!PlotlyLib || !plotlyInstance || !chartRef) return;
 		if (channels.length === 0) return;
-		PlotlyLib.react(chartRef, buildTraces(), plotlyInstance.layout);
+		const alpha = get(zenithAngle);
+		let layout = plotlyInstance.layout;
+		// Re-fit the height axis only when the zenith angle changed; otherwise
+		// keep the live layout so the user's zoom/pan survives redraws.
+		if (chartAlpha !== alpha) {
+			let maxX = 0;
+			for (const ch of channels) {
+				const last = ch.points[ch.points.length - 1];
+				if (last) maxX = Math.max(maxX, last.x);
+			}
+			layout = {
+				...plotlyInstance.layout,
+				xaxis: { ...plotlyInstance.layout.xaxis, range: [0, maxX || 1] }
+			};
+			chartAlpha = alpha;
+		}
+		PlotlyLib.react(chartRef, buildTraces(), layout);
 	}
 
 	/** @param {Date} d */
@@ -367,7 +407,7 @@
 				zeroline: false
 			},
 			yaxis: {
-				title: { text: 'Дистанция, м' },
+				title: { text: 'Высота, м' },
 				automargin: true,
 				zeroline: false
 			},

@@ -1,4 +1,4 @@
-<script>
+	<script>
 	import { errorMessage, clearError } from '$lib/state/store';
 
 	let message = $state('');
