@@ -7,6 +7,7 @@ import {
 	glueToPhoton
 } from 'licelfile-js';
 import { saveSession, loadSession } from './persistence';
+import { computeMolecularRaw, anchorMolecular } from '$lib/molecular';
 
 // ---------------------------------------------------------------------------
 // Global state
@@ -775,6 +776,9 @@ export async function cropByHeight(maxHeight) {
 			if (keep >= total || keep < 1) return;
 			p.data = p.data.slice(0, keep);
 			p.nDataPoints = p.data.length;
+			if (p.molecular && p.molecular.data) {
+				p.molecular = { ...p.molecular, data: p.molecular.data.slice(0, keep) };
+			}
 		},
 		{ includeInactive: true }
 	);
@@ -782,6 +786,150 @@ export async function cropByHeight(maxHeight) {
 	refreshFileSizes(selected);
 
 	cropByHeightConfig.set({ maxHeight: '' });
+	await persistSession();
+}
+
+// ---------------------------------------------------------------------------
+// Molecular anchoring ("молекулярная привязка")
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute and store the purely molecular scattering profile for every channel
+ * of every selected file. The meteo profiles (P in Pa, H in m, T in K) are
+ * interpolated onto each channel's uniform height grid with step
+ * binWidth * cos(zenithAngle). For every channel the anchoring factor K is the
+ * mean ratio of the measured signal to the unanchored molecular signal within
+ * (zMin; zMax), and the stored profile is K * beta_m(z) * z^-2 * exp(-2 * tau(z)).
+ * @param {{ meteo?: any, zMin?: number, zMax?: number, sourceName?: string }} [params]
+ */
+export async function applyMolecularAnchoring(params = {}) {
+	const { meteo, zMin, zMax, sourceName = '' } = params;
+
+	if (!meteo || !(meteo.heights instanceof Float64Array) || meteo.heights.length < 2) {
+		showError('Метеоданные не загружены или повреждены.');
+		return;
+	}
+	/** @type {number} */
+	const zMinValue = typeof zMin === 'number' && Number.isFinite(zMin) ? zMin : NaN;
+	/** @type {number} */
+	const zMaxValue = typeof zMax === 'number' && Number.isFinite(zMax) ? zMax : NaN;
+	if (
+		!Number.isFinite(zMinValue) ||
+		!Number.isFinite(zMaxValue) ||
+		zMinValue < 0 ||
+		zMinValue >= zMaxValue
+	) {
+		showError('Укажите корректный диапазон высот привязки: 0 ≤ z_min < z_max.');
+		return;
+	}
+
+	const selected = getSelectedFileIds();
+	if (!selected) return;
+
+	const alphaRad = (get(zenithAngle) * Math.PI) / 180;
+	const cosZenith = Math.cos(alphaRad);
+	if (!(cosZenith > 0.05)) {
+		showError('Зенитный угол слишком велик для молекулярной привязки.');
+		return;
+	}
+
+	const data = get(licelFiles);
+	/** @type {Map<number, string>} */
+	const fileNames = new Map(get(files).map((f) => [f.id, f.name]));
+	const meteoTop = meteo.heights[meteo.heights.length - 1];
+	const meteoBottom = meteo.heights[0];
+
+	// Validate every channel before mutating anything.
+	const valid = forEachProfile(data, selected, (p, lf, id) => {
+		const fileName = fileNames.get(id) ?? `#${id}`;
+		if (!(p.binWidth > 0)) {
+			showError(`Канал ${profileLabel(p)} файла "${fileName}" имеет некорректную ширину бина.`);
+			return false;
+		}
+		if (!(p.wavelength > 0)) {
+			showError(`Канал ${profileLabel(p)} файла "${fileName}" не содержит длину волны.`);
+			return false;
+		}
+		if (!allFinite(p.data)) {
+			showError(`Канал ${profileLabel(p)} файла "${fileName}" содержит нечисловые значения.`);
+			return false;
+		}
+		const dz = p.binWidth * cosZenith;
+		const top = (p.data.length - 1) * dz;
+		if (zMinValue > top || zMaxValue > top) {
+			showError(
+				`Диапазон привязки (${zMinValue}–${zMaxValue} м) выходит за пределы канала ${profileLabel(p)} файла "${fileName}" (до ${top.toFixed(0)} м).`
+			);
+			return false;
+		}
+		if (zMaxValue > meteoTop) {
+			showError(
+				`Верхняя граница привязки (${zMaxValue.toFixed(0)} м) выше максимальной высоты метеоданных (${meteoTop.toFixed(0)} м).`
+			);
+			return false;
+		}
+		if (zMinValue < meteoBottom) {
+			showError(
+				`Нижняя граница привязки (${zMinValue.toFixed(0)} м) ниже минимальной высоты метеоданных (${meteoBottom.toFixed(0)} м).`
+			);
+			return false;
+		}
+	});
+	if (!valid) return;
+
+	// Compute every channel without mutating anything; the profile objects only
+	// get their molecular anchor after the whole batch passed, so a mid-batch
+	// failure cannot leave a partially anchored dataset.
+	/** @type {Array<{ profile: any, molecular: any }>} */
+	const anchors = [];
+	const computeOk = forEachProfile(data, selected, (p) => {
+		const dz = p.binWidth * cosZenith;
+		const n = p.data.length;
+		/** @type {Float64Array} */
+		const zGrid = new Float64Array(n);
+		for (let j = 0; j < n; j++) zGrid[j] = j * dz;
+
+		const { raw } = computeMolecularRaw({
+			wavelengthNm: p.wavelength,
+			cosZenith,
+			meteo,
+			zGrid
+		});
+		const { k, count } = anchorMolecular({
+			measured: p.data,
+			raw,
+			zGrid,
+			zMin: zMinValue,
+			zMax: zMaxValue
+		});
+		if (count === 0) {
+			showError(
+				`В диапазоне привязки (${zMinValue}–${zMaxValue} м) канала ${profileLabel(p)} нет валидных отсчётов.`
+			);
+			return false;
+		}
+
+		/** @type {Float64Array} */
+		const molecular = new Float64Array(n);
+		for (let j = 0; j < n; j++) molecular[j] = k * raw[j];
+		anchors.push({
+			profile: p,
+			molecular: {
+				data: molecular,
+				k,
+				zMin: zMinValue,
+				zMax: zMaxValue,
+				zenithDeg: get(zenithAngle),
+				wavelengthNm: p.wavelength,
+				sourceName
+			}
+		});
+	});
+	if (computeOk === false || anchors.length === 0) return;
+	for (const a of anchors) a.profile.molecular = a.molecular;
+
+	publishLicelData(new Map(data), selected);
+	refreshFileSizes(selected);
 	await persistSession();
 }
 

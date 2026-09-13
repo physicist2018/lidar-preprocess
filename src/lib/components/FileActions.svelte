@@ -10,17 +10,20 @@
 		addUnfoldWindow,
 		averageSelectedFiles,
 		setZenithAngle,
+		applyMolecularAnchoring,
 		showError
 	} from '$lib/state/store';
 	import UnfoldDialog from './UnfoldDialog.svelte';
 	import MergeChannelsDialog from './MergeChannelsDialog.svelte';
 	import ZenithAngleDialog from './ZenithAngleDialog.svelte';
+	import MolecularAnchoringDialog from './MolecularAnchoringDialog.svelte';
 
 	let fileItems = $state([]);
 	let fileInput = $state(null);
 	let unfoldDialogOpen = $state(false);
 	let mergeDialogOpen = $state(false);
 	let zenithDialogOpen = $state(false);
+	let molecularDialogOpen = $state(false);
 
 	$effect(() => {
 		const unsub = files.subscribe((val) => {
@@ -104,6 +107,18 @@
 
 	function handleAverageFiles() {
 		averageSelectedFiles();
+	}
+
+	function handleMolecularAnchoring() {
+		molecularDialogOpen = true;
+	}
+
+	/**
+	 * @param {{ meteo: any, zMin: number, zMax: number, sourceName: string }} cfg
+	 */
+	function handleMolecularApply(cfg) {
+		molecularDialogOpen = false;
+		applyMolecularAnchoring(cfg);
 	}
 
 	/**
@@ -208,6 +223,12 @@
 		>
 			Усреднение файлов
 		</button>
+		<button
+			onclick={handleMolecularAnchoring}
+			class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
+		>
+			Молекулярная привязка
+		</button>
 	</div>
 	<div class="my-1 border-t border-gray-200"></div>
 	<button
@@ -242,5 +263,12 @@
 	<ZenithAngleDialog
 		onClose={() => (zenithDialogOpen = false)}
 		onApply={(alpha) => handleZenithApply(alpha)}
+	/>
+{/if}
+
+{#if molecularDialogOpen}
+	<MolecularAnchoringDialog
+		onClose={() => (molecularDialogOpen = false)}
+		onApply={(cfg) => handleMolecularApply(cfg)}
 	/>
 {/if}

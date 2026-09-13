@@ -27,6 +27,7 @@
 
 	/** @typedef {import('licelfile-js').LicelFile} LicelFile */
 	/** @typedef {import('licelfile-js').LicelProfile} LicelProfile */
+	/** @typedef {import('licelfile-js').LicelProfile & { molecular?: { data: ArrayLike<number> } }} ProfileWithMolecular */
 
 	const channelPalette = [
 		'#3b82f6', // blue
@@ -38,6 +39,9 @@
 		'#06b6d4', // cyan
 		'#84cc16' // lime
 	];
+
+	// Color of the purely molecular profile overlay (dashed) on signal graphs.
+	const molecularColor = '#111827';
 
 	let { id, x, y, title, payload = {} } = $props();
 	let posX = $state(x);
@@ -70,7 +74,7 @@
 	let fileName = $state('');
 	/** @type {any} */
 	let licel = null;
-	/** @type {Array<{ name: string, color: string, points: Array<{ x: number, y: number }> }>} */
+	/** @type {Array<{ name: string, color: string, points: Array<{ x: number, y: number }>, molecularPoints: Array<{ x: number, y: number }> | null }>} */
 	let channels = [];
 	// Y axis scale of the graph window: 'linear' | 'log'
 	let yScale = $state('linear');
@@ -108,17 +112,27 @@
 		const cosAlpha = Math.cos(alphaRad);
 		return (lf.profiles ?? [])
 			.filter((p) => p.active !== false)
-			.map((p, i) => {
+			.map((/** @type {ProfileWithMolecular} */ p, i) => {
 				const binWidth = p.binWidth > 0 ? p.binWidth : 1;
 				const data = p.data ? Array.from(p.data) : [];
 				const points = data.map((y, j) => ({ x: j * binWidth * cosAlpha, y }));
+				let molecularPoints = null;
+				if (p.molecular && p.molecular.data) {
+					const molecular = p.molecular.data;
+					const n = Math.min(molecular.length, data.length);
+					molecularPoints = new Array(n);
+					for (let j = 0; j < n; j++) {
+						molecularPoints[j] = { x: j * binWidth * cosAlpha, y: molecular[j] };
+					}
+				}
 				const mode =
 					p.deviceID === 'BC' ? 'фотон' : p.deviceID === 'BT' ? 'аналог' : p.deviceID || 'канал';
 				const pol = p.polarization ? ` (${p.polarization})` : '';
 				return {
 					name: `${p.wavelength} нм${pol} · ${mode}`,
 					color: channelPalette[i % channelPalette.length],
-					points
+					points,
+					molecularPoints
 				};
 			});
 	}
@@ -315,16 +329,30 @@
 	}
 
 	function buildTraces() {
-		return channels
-			.filter((ch) => channelStates[ch.name])
-			.map((ch) => ({
-				x: ch.points.map((p) => p.x),
-				y: ch.points.map((p) => p.y),
-				name: ch.name,
-				mode: 'lines',
-				line: { color: ch.color, width: 1.5 },
-				connectgaps: false
-			}));
+		return channels.flatMap((ch) => {
+			if (!channelStates[ch.name]) return [];
+			const traces = [
+				{
+					x: ch.points.map((p) => p.x),
+					y: ch.points.map((p) => p.y),
+					name: ch.name,
+					mode: 'lines',
+					line: { color: ch.color, width: 1.5, dash: 'solid' },
+					connectgaps: false
+				}
+			];
+			if (ch.molecularPoints && ch.molecularPoints.length > 0) {
+				traces.push({
+					x: ch.molecularPoints.map((p) => p.x),
+					y: ch.molecularPoints.map((p) => p.y),
+					name: `${ch.name} · мол.`,
+					mode: 'lines',
+					line: { color: molecularColor, width: 1.2, dash: 'dash' },
+					connectgaps: false
+				});
+			}
+			return traces;
+		});
 	}
 
 	function updateChart() {
