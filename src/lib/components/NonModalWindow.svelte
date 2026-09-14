@@ -20,18 +20,19 @@
 	/** @typedef {import('licelfile-js').LicelProfile & { molecular?: { data: ArrayLike<number>, zenithDeg?: number } }} ProfileWithMolecular */
 
 	const channelPalette = [
-		'#3b82f6', // blue
-		'#10b981', // green
-		'#ef4444', // red
-		'#f59e0b', // amber
-		'#8b5cf6', // violet
-		'#ec4899', // pink
-		'#06b6d4', // cyan
-		'#84cc16' // lime
+		'#2563eb', // blue
+		'#dc2626', // red
+		'#16a34a', // green
+		'#ea580c', // orange
+		'#9333ea', // purple
+		'#0d9488', // teal
+		'#ca8a04', // amber
+		'#db2777', // pink
+		'#0891b2', // cyan
+		'#4f46e5', // indigo
+		'#65a30d', // lime
+		'#334155' // slate
 	];
-
-	// Color of the purely molecular profile overlay (dashed) on signal graphs.
-	const molecularColor = '#111827';
 
 	let {
 		id,
@@ -337,6 +338,7 @@
 					y: ch.points.map((p) => p.y),
 					name: ch.name,
 					mode: 'lines',
+					showlegend: true,
 					line: { color: ch.color, width: 1.5, dash: 'solid' },
 					connectgaps: false
 				}
@@ -347,7 +349,8 @@
 					y: ch.molecularPoints.map((p) => p.y),
 					name: `${ch.name} · мол.`,
 					mode: 'lines',
-					line: { color: molecularColor, width: 1.2, dash: 'dash' },
+					showlegend: false,
+					line: { color: ch.color, width: 1.2, dash: 'dash' },
 					connectgaps: false
 				});
 			}

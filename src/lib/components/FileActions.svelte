@@ -42,10 +42,6 @@
 		toggleSelectAll(!allSelected);
 	}
 
-	function handleDeselectAll() {
-		toggleSelectAll(false);
-	}
-
 	function handleDeleteSelected() {
 		deleteSelected();
 	}
@@ -172,13 +168,7 @@
 		onclick={handleSelectAll}
 		class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
 	>
-		Выделить все
-	</button>
-	<button
-		onclick={handleDeselectAll}
-		class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
-	>
-		Снять выделение
+		Выделить/снять выделение
 	</button>
 	<button
 		onclick={handleDeleteSelected}
