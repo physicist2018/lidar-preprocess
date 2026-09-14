@@ -325,6 +325,8 @@
 
 			Plotly.newPlot(chartRef, traces, layout, configPlotly).then((/** @type {any} */ instance) => {
 				plotlyInstance = instance;
+				// Mirror Plotly's legend visibility toggle into the channel checkboxes.
+				/** @type {any} */ (chartRef)?.on('plotly_legendclick', handlePlotlyLegendClick);
 			});
 		});
 	}
@@ -492,6 +494,35 @@
 			unfoldRafId = 0;
 			updateUnfoldChart();
 		});
+	}
+
+	/** @param {string} name */
+	function channelCheckboxId(name) {
+		return 'channel-checkbox-' + name.replace(/\s+/g, '_');
+	}
+
+	/**
+	 * Sync the channel checkbox with the trace's visibility after a legend
+	 * click. Plotly toggles the trace visibility on its own; here the resulting
+	 * state is mirrored into the channel state and the checkbox element located
+	 * by the trace's unique name-based id.
+	 * @param {any} e
+	 */
+	function handlePlotlyLegendClick(e) {
+		const trace = e?.fullData?.[e.curveNumber];
+		if (!trace || typeof trace.name !== 'string' || !(trace.name in channelStates)) return;
+		const wasVisible = trace.visible !== false && trace.visible !== 'legendonly';
+		const nextState = !wasVisible;
+		if (channelStates[trace.name] !== nextState) {
+			channelStates = { ...channelStates, [trace.name]: nextState };
+			pushView();
+		}
+		const checkbox = /** @type {HTMLInputElement | null} */ (
+			document.getElementById(channelCheckboxId(trace.name))
+		);
+		if (checkbox && checkbox.checked !== nextState) {
+			checkbox.checked = nextState;
+		}
 	}
 
 	/** @param {string} name */
@@ -750,6 +781,7 @@
 								>
 									<input
 										type="checkbox"
+										id={channelCheckboxId(name)}
 										checked={enabled}
 										onchange={() => handleChannelToggle(name)}
 										class="accent-blue-600"
