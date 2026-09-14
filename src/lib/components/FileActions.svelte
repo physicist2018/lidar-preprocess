@@ -6,7 +6,6 @@
 		mergeChannels,
 		openFiles,
 		savePackToZip,
-		addWindow,
 		addUnfoldWindow,
 		averageSelectedFiles,
 		setZenithAngle,
@@ -17,13 +16,19 @@
 	import MergeChannelsDialog from './MergeChannelsDialog.svelte';
 	import ZenithAngleDialog from './ZenithAngleDialog.svelte';
 	import MolecularAnchoringDialog from './MolecularAnchoringDialog.svelte';
+	import RemoveBackgroundDialog from './RemoveBackgroundDialog.svelte';
+	import MedianFilterDialog from './MedianFilterDialog.svelte';
+	import CropByHeightDialog from './CropByHeightDialog.svelte';
 
-	let fileItems = $state([]);
-	let fileInput = $state(null);
+	let fileItems = $state(/** @type {Array<any>} */ ([]));
+	let fileInput = $state(/** @type {HTMLInputElement | null} */ (null));
 	let unfoldDialogOpen = $state(false);
 	let mergeDialogOpen = $state(false);
 	let zenithDialogOpen = $state(false);
 	let molecularDialogOpen = $state(false);
+	let removeBgOpen = $state(false);
+	let medianOpen = $state(false);
+	let cropOpen = $state(false);
 
 	$effect(() => {
 		const unsub = files.subscribe((val) => {
@@ -46,11 +51,11 @@
 	}
 
 	function handleRemoveBackground() {
-		addWindow('Удаление фона');
+		removeBgOpen = true;
 	}
 
 	function handleMedianFiltering() {
-		addWindow('Медианная фильтрация');
+		medianOpen = true;
 	}
 
 	function handleMergeChannels() {
@@ -69,8 +74,10 @@
 		fileInput?.click();
 	}
 
+	/** @param {Event} e */
 	async function handleFileSelect(e) {
-		const file = e.target.files?.[0];
+		const input = /** @type {HTMLInputElement | null} */ (e.target);
+		const file = input?.files?.[0];
 		if (!file) return;
 
 		try {
@@ -81,12 +88,12 @@
 			showError(`Не удалось прочитать файл "${file.name}": ${detail}`);
 		} finally {
 			// Reset input so same file can be selected again
-			e.target.value = '';
+			if (input) input.value = '';
 		}
 	}
 
 	function handleCropByHeight() {
-		addWindow('Обрезка по высоте');
+		cropOpen = true;
 	}
 
 	function handleDrawUnfold() {
@@ -271,4 +278,16 @@
 		onClose={() => (molecularDialogOpen = false)}
 		onApply={(cfg) => handleMolecularApply(cfg)}
 	/>
+{/if}
+
+{#if removeBgOpen}
+	<RemoveBackgroundDialog onClose={() => (removeBgOpen = false)} />
+{/if}
+
+{#if medianOpen}
+	<MedianFilterDialog onClose={() => (medianOpen = false)} />
+{/if}
+
+{#if cropOpen}
+	<CropByHeightDialog onClose={() => (cropOpen = false)} />
 {/if}

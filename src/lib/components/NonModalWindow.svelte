@@ -1,26 +1,15 @@
-<script module>
-	let highestZ = 100;
-	export function getNextZIndex() {
-		return ++highestZ;
-	}
-</script>
-
 <script>
 	import {
 		removeWindow,
-		backgroundRemoval,
-		removeBackground,
-		medianFilter,
-		medianFiltering,
-		MEDIAN_WINDOW_MAX,
-		cropByHeightConfig,
-		cropByHeight,
 		licelFiles,
 		licelDataTouched,
 		buildUnfoldData,
 		savedChannelSelection,
 		rememberChannelSelection,
-		zenithAngle
+		zenithAngle,
+		nextWindowZ,
+		seedWindowZ,
+		updateWindowState
 	} from '$lib/state/store';
 	import { get } from 'svelte/store';
 	import { resampleMolecular } from '$lib/molecular';
@@ -44,31 +33,39 @@
 	// Color of the purely molecular profile overlay (dashed) on signal graphs.
 	const molecularColor = '#111827';
 
-	let { id, x, y, title, payload = {} } = $props();
+	let {
+		id,
+		x,
+		y,
+		title,
+		width = null,
+		height = null,
+		z = null,
+		collapsed = false,
+		maximized = false,
+		view = null,
+		payload = {}
+	} = $props();
 	let posX = $state(x);
 	let posY = $state(y);
 	let windowRef = $state(/** @type {HTMLDivElement | null} */ (null));
 	let isDragging = $state(false);
 	let dragOffset = { x: 0, y: 0 };
-	let zIndex = $state(getNextZIndex());
+	seedWindowZ(z ?? 0);
+	let zIndex = $state(z ?? nextWindowZ());
 	let chartRef = $state(/** @type {HTMLDivElement | null} */ (null));
 	let plotlyInstance = $state(/** @type {any} */ (null));
 	let PlotlyLib = /** @type {any} */ (null);
 	let isResizing = $state(false);
 	let resizeStart = { x: 0, y: 0, w: 0, h: 0 };
 	let windowWidth = $state(
-		title.startsWith('График: ') ? 640 : title.startsWith('Развертка: ') ? 820 : 360
+		width ?? (title.startsWith('График: ') ? 640 : title.startsWith('Развертка: ') ? 820 : 360)
 	);
-	let windowHeight = $state(/** @type {number | null} */ (null)); // null = auto, explicit px after manual resize
+	let windowHeight = $state(/** @type {number | null} */ (height)); // null = auto, explicit px after manual resize
+	let collapsedState = $state(collapsed === true);
+	let maximizedState = $state(maximized === true);
+	let lastBounds = { x: posX, y: posY, width: windowWidth, height: windowHeight };
 
-	let config = $state(
-		/** @type {{ method: string, height: string, referenceFile: File | null, referenceName: string }} */ ({
-			method: 'average',
-			height: '',
-			referenceFile: null,
-			referenceName: ''
-		})
-	);
 	let channelStates = $state(/** @type {Record<string, boolean>} */ ({}));
 	// Per-window data resolved from the current dataset; refreshed whenever
 	// licelFiles changes so graph windows reflect data-modifying operations.
@@ -78,7 +75,7 @@
 	/** @type {Array<{ name: string, color: string, points: Array<{ x: number, y: number }>, molecularPoints: Array<{ x: number, y: number }> | null }>} */
 	let channels = [];
 	// Y axis scale of the graph window: 'linear' | 'log'
-	let yScale = $state('linear');
+	let yScale = $state(view?.yScale === 'log' || view?.yScale === 'linear' ? view.yScale : 'linear');
 	// Zenith angle whose height extent is currently refit into the x axis range.
 	let chartAlpha = /** @type {number | null} */ (null);
 
@@ -155,42 +152,19 @@
 			});
 	}
 
-	$effect(() => {
-		const unsub = backgroundRemoval.subscribe((val) => {
-			config = { ...val, referenceName: val.referenceFile?.name || '' };
-		});
-		return unsub;
-	});
-
-	let medianWindowSize = $state('');
-
-	$effect(() => {
-		const unsub = medianFilter.subscribe((val) => {
-			medianWindowSize = val.windowSize;
-		});
-		return unsub;
-	});
-
-	let cropMaxHeight = $state('');
-
-	$effect(() => {
-		const unsub = cropByHeightConfig.subscribe((val) => {
-			cropMaxHeight = val.maxHeight;
-		});
-		return unsub;
-	});
-
-	// Initialize channel states before mount: by default all enabled, but when a
-	// selection was remembered ("Кнопка 2") restore exactly those visible channels.
+	// Initialize channel states before mount: restore the persisted per-window
+	// selection, otherwise the globally remembered selection ("Кнопка 2"),
+	// otherwise every channel enabled.
 	{
 		/** @type {Record<string, boolean>} */
 		const states = {};
-		const saved = get(savedChannelSelection);
+		const saved = view?.channelStates || get(savedChannelSelection);
 		for (const ch of channels) {
 			states[ch.name] = saved ? (saved[ch.name] ?? false) : true;
 		}
 		channelStates = states;
 	}
+	if (channels.length > 0) pushView();
 
 	// Keep graph windows in sync with the current dataset. Data-modifying
 	// operations (background removal, crop by height, median filtering) mutate
@@ -247,6 +221,7 @@
 				channelStates = nextStates;
 				channels = rebuilt;
 				updateChart();
+				pushView();
 			});
 		}
 	});
@@ -284,6 +259,13 @@
 			});
 		});
 		observer.observe(el);
+		// Guarantee a redraw even when the chart was first created with a zero
+		// or stale size (e.g. right after a session restore): fire one resize
+		// pass once the element has real dimensions.
+		requestAnimationFrame(() => {
+			const rect = el.getBoundingClientRect();
+			if (rect.width > 0 && rect.height > 0) PlotlyLib.Plots.resize(el);
+		});
 		return () => {
 			observer.disconnect();
 			if (rafId) cancelAnimationFrame(rafId);
@@ -513,6 +495,7 @@
 	function handleChannelToggle(name) {
 		channelStates = { ...channelStates, [name]: !channelStates[name] };
 		updateChart();
+		pushView();
 	}
 
 	function handleToggleAllChannels() {
@@ -525,6 +508,7 @@
 		}
 		channelStates = next;
 		updateChart();
+		pushView();
 	}
 
 	function handleRememberChannels() {
@@ -534,6 +518,7 @@
 	function handleToggleYScale() {
 		const next = yScale === 'linear' ? 'log' : 'linear';
 		yScale = next;
+		pushView();
 		if (!PlotlyLib || !plotlyInstance || !chartRef) return;
 		const layout = {
 			...plotlyInstance.layout,
@@ -544,13 +529,53 @@
 		});
 	}
 
+	/** Write the current y scale / channel states back into the window record. */
+	function pushView() {
+		updateWindowState(id, { view: { yScale, channelStates } });
+	}
+
+	/** Bring the window to the front and record the new z-order. */
+	function bringToFront() {
+		if (maximizedState) return;
+		zIndex = nextWindowZ();
+		updateWindowState(id, { z: zIndex });
+	}
+
+	function handleToggleCollapse() {
+		collapsedState = !collapsedState;
+		if (collapsedState) {
+			lastBounds = { x: posX, y: posY, width: windowWidth, height: windowHeight };
+		} else {
+			posX = lastBounds.x;
+			posY = lastBounds.y;
+			windowWidth = lastBounds.width;
+			windowHeight = lastBounds.height;
+			updateWindowState(id, { x: posX, y: posY, width: windowWidth, height: windowHeight });
+		}
+		updateWindowState(id, { collapsed: collapsedState });
+	}
+
+	function handleToggleMaximize() {
+		maximizedState = !maximizedState;
+		if (maximizedState) {
+			lastBounds = { x: posX, y: posY, width: windowWidth, height: windowHeight };
+		} else {
+			posX = lastBounds.x;
+			posY = lastBounds.y;
+			windowWidth = lastBounds.width;
+			windowHeight = lastBounds.height;
+			updateWindowState(id, { x: posX, y: posY, width: windowWidth, height: windowHeight });
+		}
+		updateWindowState(id, { maximized: maximizedState });
+	}
+
 	/** @param {MouseEvent} e */
 	function handleResizeStart(e) {
-		if (e.button !== 0 || !windowRef) return;
+		if (e.button !== 0 || !windowRef || maximizedState) return;
 		const rect = windowRef.getBoundingClientRect();
 		resizeStart = { x: e.clientX, y: e.clientY, w: rect.width, h: rect.height };
 		isResizing = true;
-		zIndex = getNextZIndex();
+		bringToFront();
 		e.preventDefault();
 		e.stopPropagation();
 
@@ -565,6 +590,12 @@
 			isResizing = false;
 			document.removeEventListener('mousemove', handleMove);
 			document.removeEventListener('mouseup', handleUp);
+			updateWindowState(id, {
+				x: posX,
+				y: posY,
+				width: windowWidth,
+				height: windowHeight
+			});
 		}
 
 		document.addEventListener('mousemove', handleMove);
@@ -574,8 +605,9 @@
 	/** @param {MouseEvent} e */
 	function handleMouseDown(e) {
 		if (e.button !== 0) return;
-		if (e.target.closest('.no-drag')) return;
-		if (!windowRef) return;
+		const target = /** @type {HTMLElement | null} */ (e.target);
+		if (!target || target.closest('.no-drag')) return;
+		if (!windowRef || maximizedState) return;
 
 		const rect = windowRef.getBoundingClientRect();
 		const startClientX = e.clientX;
@@ -585,7 +617,7 @@
 		dragOffset.x = startClientX - rect.left;
 		dragOffset.y = startClientY - rect.top;
 		isDragging = true;
-		zIndex = getNextZIndex();
+		bringToFront();
 		e.preventDefault();
 
 		/** @param {MouseEvent} e2 */
@@ -603,6 +635,7 @@
 			isDragging = false;
 			document.removeEventListener('mousemove', handleMove);
 			document.removeEventListener('mouseup', handleUp);
+			updateWindowState(id, { x: posX, y: posY });
 		}
 
 		document.addEventListener('mousemove', handleMove);
@@ -612,374 +645,205 @@
 	function handleClose() {
 		removeWindow(id);
 	}
-
-	function handleFileChange(e) {
-		const file = e.target.files?.[0];
-		if (file) {
-			config.referenceFile = file;
-			config.referenceName = file.name;
-		}
-	}
-
-	function handleApply() {
-		if (config.method === 'reference') {
-			removeBackground({
-				method: config.method,
-				height: null,
-				referenceFile: config.referenceFile
-			});
-			return;
-		}
-		const height = parseBgHeight();
-		if (height == null) return;
-		removeBackground({ method: config.method, height, referenceFile: null });
-	}
-
-	/** @returns {number | null} */
-	function parseBgHeight() {
-		if (config.height === '' || config.height == null) return null;
-		const value = Number(config.height);
-		if (!Number.isFinite(value) || value < 0) return null;
-		return value;
-	}
-
-	function isBgHeightEmpty() {
-		return config.height === '' || config.height == null;
-	}
-
-	function isApplyDisabled() {
-		if (config.method === 'reference') {
-			return !config.referenceFile;
-		}
-		return parseBgHeight() == null;
-	}
-
-	/** @returns {number | null} */
-	function parseMedianWindowSize() {
-		const value = Number(medianWindowSize);
-		if (!Number.isSafeInteger(value) || value % 2 === 0 || value < 3 || value > MEDIAN_WINDOW_MAX)
-			return null;
-		return value;
-	}
-
-	function isMedianWindowEmpty() {
-		return medianWindowSize === '' || medianWindowSize == null;
-	}
-
-	function handleMedianApply() {
-		const size = parseMedianWindowSize();
-		if (size == null) return;
-		medianFiltering(size);
-	}
-
-	/** @returns {number | null} */
-	function parseCropMaxHeight() {
-		const value = Number(cropMaxHeight);
-		if (!Number.isFinite(value) || value <= 0) return null;
-		return value;
-	}
-
-	function isCropMaxHeightEmpty() {
-		return cropMaxHeight === '' || cropMaxHeight == null;
-	}
-
-	async function handleCropApply() {
-		const maxHeight = parseCropMaxHeight();
-		if (maxHeight == null) return;
-		await cropByHeight(maxHeight);
-	}
 </script>
 
 <div
 	bind:this={windowRef}
 	tabindex="-1"
 	class="absolute flex flex-col overflow-hidden rounded-lg border border-gray-200 bg-white shadow-xl"
-	style="left: {posX}px; top: {posY}px; width: {windowWidth}px; min-width: 320px; height: {windowHeight
-		? windowHeight + 'px'
-		: 'auto'}; min-height: 200px; z-index: {zIndex}"
-	onmousedown={() => {
-		zIndex = getNextZIndex();
-	}}
+	style="left: {maximizedState ? 0 : posX}px; top: {maximizedState
+		? 0
+		: posY}px; width: {maximizedState
+		? '100%'
+		: windowWidth + 'px'}; min-width: 320px; height: {maximizedState
+		? '100%'
+		: collapsedState
+			? 32 + 'px'
+			: windowHeight
+				? windowHeight + 'px'
+				: 'auto'}; min-height: {maximizedState || collapsedState ? 0 : 200}px; z-index: {zIndex}"
+	onmousedown={bringToFront}
 >
 	<div
 		role="presentation"
 		class="flex cursor-move items-center justify-between border-b border-gray-200 bg-gray-50 px-3 py-2 select-none"
 		onmousedown={handleMouseDown}
 	>
-		<span class="text-sm font-medium text-gray-700">{title}</span>
-		<button
-			onclick={handleClose}
-			aria-label="Закрыть"
-			class="no-drag flex h-6 w-6 items-center justify-center rounded text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-800"
-		>
-			<svg
-				xmlns="http://www.w3.org/2000/svg"
-				class="h-4 w-4"
-				fill="none"
-				viewBox="0 0 24 24"
-				stroke="currentColor"
-				stroke-width="2"
+		<span class="truncate text-sm font-medium text-gray-700">{title}</span>
+		<div class="no-drag flex items-center gap-1">
+			<button
+				onclick={handleToggleCollapse}
+				aria-label={collapsedState ? 'Развернуть' : 'Свернуть'}
+				class="flex h-6 w-6 items-center justify-center rounded text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-800"
 			>
-				<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-			</svg>
-		</button>
+				<svg
+					xmlns="http://www.w3.org/2000/svg"
+					class="h-4 w-4"
+					fill="none"
+					viewBox="0 0 24 24"
+					stroke="currentColor"
+					stroke-width="2"
+				>
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						d={collapsedState ? 'M5 6l14 0M5 10l14 0M12 4l0 14' : 'M7 13l10 4M7 9l10 4'}
+					/>
+				</svg>
+			</button>
+			<button
+				onclick={handleToggleMaximize}
+				aria-label={maximizedState ? 'Восстановить размер' : 'Развернуть на весь экран'}
+				class="flex h-6 w-6 items-center justify-center rounded text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-800"
+			>
+				<svg
+					xmlns="http://www.w3.org/2000/svg"
+					class="h-4 w-4"
+					fill="none"
+					viewBox="0 0 24 24"
+					stroke="currentColor"
+					stroke-width="2"
+				>
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						d={maximizedState ? 'M6 7l12 4v8h12M10 16v-3M14 13v3' : 'M6 6l12 0v12h12'}
+					/>
+				</svg>
+			</button>
+			<button
+				onclick={handleClose}
+				aria-label="Закрыть"
+				class="flex h-6 w-6 items-center justify-center rounded text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-800"
+			>
+				<svg
+					xmlns="http://www.w3.org/2000/svg"
+					class="h-4 w-4"
+					fill="none"
+					viewBox="0 0 24 24"
+					stroke="currentColor"
+					stroke-width="2"
+				>
+					<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+				</svg>
+			</button>
+		</div>
 	</div>
 
-	<!-- Graph window -->
-	{#if title.startsWith('График: ')}
-		<div class="flex h-full" style="min-height: 400px;">
-			<!-- Left panel: channel list -->
-			<div class="flex w-56 shrink-0 flex-col border-r border-gray-200">
-				<div class="border-b border-gray-200 px-3 py-2">
-					<h3 class="text-xs font-semibold tracking-wider text-gray-500 uppercase">Каналы</h3>
-				</div>
-				<div class="flex-1 space-y-1 overflow-auto p-2">
-					{#if fileName}
-						{#each Object.entries(channelStates) as [name, enabled]}
-							<label
-								class="flex cursor-pointer items-center gap-2 rounded px-1 py-1 hover:bg-gray-50"
-							>
-								<input
-									type="checkbox"
-									checked={enabled}
-									onchange={() => handleChannelToggle(name)}
-									class="accent-blue-600"
-								/>
-								<span class="truncate text-xs">{name}</span>
-							</label>
-						{/each}
-					{/if}
-				</div>
-				<div class="space-y-1 border-t border-gray-200 px-2 py-2">
-					<button
-						onclick={handleToggleAllChannels}
-						class="w-full rounded bg-gray-100 px-2 py-1.5 text-xs transition-colors hover:bg-gray-200"
-					>
-						Вкл / Выкл все
-					</button>
-					<button
-						onclick={handleRememberChannels}
-						class="w-full rounded bg-gray-100 px-2 py-1.5 text-xs transition-colors hover:bg-gray-200"
-					>
-						Запомнить
-					</button>
-					<button
-						onclick={handleToggleYScale}
-						class="w-full rounded px-2 py-1.5 text-xs font-medium transition-colors {yScale ===
-						'log'
-							? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
-							: 'bg-gray-100 text-gray-700 hover:bg-gray-200'}"
-					>
-						{yScale === 'log' ? 'Лин. по Y' : 'Лог. по Y'}
-					</button>
-				</div>
-			</div>
-
-			<!-- Right panel: chart -->
-			<div class="flex-1 p-2">
-				{#if channels.length === 0}
-					<div class="flex h-full items-center justify-center text-sm text-gray-400">
-						Данные файла недоступны
+	{#if !collapsedState}
+		<!-- Graph window -->
+		{#if title.startsWith('График: ')}
+			<div class="flex h-full" style="min-height: 400px;">
+				<!-- Left panel: channel list -->
+				<div class="flex w-56 shrink-0 flex-col border-r border-gray-200">
+					<div class="border-b border-gray-200 px-3 py-2">
+						<h3 class="text-xs font-semibold tracking-wider text-gray-500 uppercase">Каналы</h3>
 					</div>
-				{:else}
-					<div bind:this={chartRef} style="width: 100%; height: 100%; min-height: 300px;"></div>
-				{/if}
-			</div>
-		</div>
-	{:else if isUnfoldWindow}
-		<div class="flex h-full flex-col" style="min-height: 400px;">
-			{#if unfoldInfo}
-				<div
-					class="flex items-center justify-between border-b border-gray-200 px-3 py-1.5 text-xs text-gray-500"
-				>
-					<span>{unfoldInfo}</span>
-					<span>{unfoldConfig?.channelLabel}</span>
-				</div>
-			{/if}
-			<div class="relative min-h-0 flex-1 p-2">
-				<div bind:this={chartRef} style="width: 100%; height: 100%; min-height: 300px;"></div>
-				{#if unfoldError}
-					<div
-						class="absolute inset-2 z-10 flex items-center justify-center rounded bg-white/90 p-3 text-center text-sm text-red-600"
-					>
-						{unfoldError}
-					</div>
-				{/if}
-			</div>
-		</div>
-	{:else}
-		<div class="flex-1 overflow-auto p-4">
-			{#if title === 'Удаление фона'}
-				<div class="space-y-3">
-					<!-- Method selection -->
-					<div class="space-y-2">
-						<label class="flex cursor-pointer items-center gap-2">
-							<input
-								type="radio"
-								name="bgMethod"
-								checked={config.method === 'average'}
-								onchange={() => (config.method = 'average')}
-								class="accent-blue-600"
-							/>
-							<span class="text-sm text-gray-700">Среднее арифметическое</span>
-						</label>
-						<label class="flex cursor-pointer items-center gap-2">
-							<input
-								type="radio"
-								name="bgMethod"
-								checked={config.method === 'median'}
-								onchange={() => (config.method = 'median')}
-								class="accent-blue-600"
-							/>
-							<span class="text-sm text-gray-700">Медиана</span>
-						</label>
-						<label class="flex cursor-pointer items-center gap-2">
-							<input
-								type="radio"
-								name="bgMethod"
-								checked={config.method === 'reference'}
-								onchange={() => (config.method = 'reference')}
-								class="accent-blue-600"
-							/>
-							<span class="text-sm text-gray-700">Референсный файл</span>
-						</label>
-					</div>
-
-					<!-- Height input for average/median -->
-					{#if config.method === 'average' || config.method === 'median'}
-						<div>
-							<label class="mb-1 block text-xs text-gray-500">Высота начала, м</label>
-							<input
-								type="number"
-								bind:value={config.height}
-								min="0"
-								placeholder="80000"
-								class="w-full rounded border px-2 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-							/>
-							{#if !isBgHeightEmpty() && parseBgHeight() == null}
-								<p class="mt-1 text-xs text-red-600">Введите неотрицательное число метров</p>
-							{/if}
-							<p class="mt-1 text-xs text-gray-400">
-								Фон оценивается по отсчётам от этой высоты до конца канала и вычитается из сигнала.
-							</p>
-						</div>
-					{/if}
-
-					<!-- Reference file input -->
-					{#if config.method === 'reference'}
-						<div>
-							<label class="mb-1 block text-xs text-gray-500">Референсный файл</label>
-							<input
-								type="file"
-								accept="*.*"
-								onchange={handleFileChange}
-								class="block w-full cursor-pointer text-xs text-gray-500 file:mr-3 file:rounded file:border-0 file:bg-blue-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-blue-700 hover:file:bg-blue-100"
-							/>
-							{#if config.referenceName}
-								<p class="mt-1 truncate text-xs text-gray-600">{config.referenceName}</p>
-							{/if}
-						</div>
-					{/if}
-
-					<!-- Apply button -->
-					<button
-						onclick={handleApply}
-						disabled={isApplyDisabled()}
-						class="w-full rounded py-1.5 text-sm font-medium transition-colors {isApplyDisabled()
-							? 'cursor-not-allowed bg-gray-200 text-gray-400'
-							: 'bg-blue-600 text-white hover:bg-blue-700'}"
-					>
-						Применить
-					</button>
-				</div>
-			{:else if title === 'Обрезка по высоте'}
-				<div class="space-y-3">
-					<div>
-						<label class="mb-1 block text-xs text-gray-500">Максимальная высота, м</label>
-						<input
-							type="number"
-							bind:value={cropMaxHeight}
-							min="0"
-							placeholder="7500"
-							class="w-full rounded border px-2 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-						/>
-						{#if !isCropMaxHeightEmpty() && parseCropMaxHeight() == null}
-							<p class="mt-1 text-xs text-red-600">Введите положительное число</p>
+					<div class="flex-1 space-y-1 overflow-auto p-2">
+						{#if fileName}
+							{#each Object.entries(channelStates) as [name, enabled]}
+								<label
+									class="flex cursor-pointer items-center gap-2 rounded px-1 py-1 hover:bg-gray-50"
+								>
+									<input
+										type="checkbox"
+										checked={enabled}
+										onchange={() => handleChannelToggle(name)}
+										class="accent-blue-600"
+									/>
+									<span class="truncate text-xs">{name}</span>
+								</label>
+							{/each}
 						{/if}
 					</div>
-					<button
-						onclick={handleCropApply}
-						disabled={parseCropMaxHeight() == null}
-						class="w-full rounded py-1.5 text-sm font-medium transition-colors {parseCropMaxHeight() ==
-						null
-							? 'cursor-not-allowed bg-gray-200 text-gray-400'
-							: 'bg-blue-600 text-white hover:bg-blue-700'}"
-					>
-						Применить
-					</button>
-				</div>
-			{:else if title === 'Медианная фильтрация'}
-				<div class="space-y-3">
-					<div>
-						<label class="mb-1 block text-xs text-gray-500"
-							>Размер окна фильтрации (нечётное число)</label
+					<div class="space-y-1 border-t border-gray-200 px-2 py-2">
+						<button
+							onclick={handleToggleAllChannels}
+							class="w-full rounded bg-gray-100 px-2 py-1.5 text-xs transition-colors hover:bg-gray-200"
 						>
-						<input
-							type="number"
-							bind:value={medianWindowSize}
-							min="3"
-							max={MEDIAN_WINDOW_MAX}
-							step="2"
-							placeholder="5"
-							class="w-full rounded border px-2 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-						/>
-						{#if !isMedianWindowEmpty() && parseMedianWindowSize() == null}
-							<p class="mt-1 text-xs text-red-600">
-								Введите нечётное целое число от 3 до {MEDIAN_WINDOW_MAX}
-							</p>
-						{/if}
+							Вкл / Выкл все
+						</button>
+						<button
+							onclick={handleRememberChannels}
+							class="w-full rounded bg-gray-100 px-2 py-1.5 text-xs transition-colors hover:bg-gray-200"
+						>
+							Запомнить
+						</button>
+						<button
+							onclick={handleToggleYScale}
+							class="w-full rounded px-2 py-1.5 text-xs font-medium transition-colors {yScale ===
+							'log'
+								? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+								: 'bg-gray-100 text-gray-700 hover:bg-gray-200'}"
+						>
+							{yScale === 'log' ? 'Лин. по Y' : 'Лог. по Y'}
+						</button>
 					</div>
-					<button
-						onclick={handleMedianApply}
-						disabled={parseMedianWindowSize() == null}
-						class="w-full rounded py-1.5 text-sm font-medium transition-colors {parseMedianWindowSize() ==
-						null
-							? 'cursor-not-allowed bg-gray-200 text-gray-400'
-							: 'bg-blue-600 text-white hover:bg-blue-700'}"
-					>
-						Применить
-					</button>
 				</div>
-			{:else}
+
+				<!-- Right panel: chart -->
+				<div class="flex-1 p-2">
+					{#if channels.length === 0}
+						<div class="flex h-full items-center justify-center text-sm text-gray-400">
+							Данные файла недоступны
+						</div>
+					{:else}
+						<div bind:this={chartRef} style="width: 100%; height: 100%; min-height: 300px;"></div>
+					{/if}
+				</div>
+			</div>
+		{:else if isUnfoldWindow}
+			<div class="flex h-full flex-col" style="min-height: 400px;">
+				{#if unfoldInfo}
+					<div
+						class="flex items-center justify-between border-b border-gray-200 px-3 py-1.5 text-xs text-gray-500"
+					>
+						<span>{unfoldInfo}</span>
+						<span>{unfoldConfig?.channelLabel}</span>
+					</div>
+				{/if}
+				<div class="relative min-h-0 flex-1 p-2">
+					<div bind:this={chartRef} style="width: 100%; height: 100%; min-height: 300px;"></div>
+					{#if unfoldError}
+						<div
+							class="absolute inset-2 z-10 flex items-center justify-center rounded bg-white/90 p-3 text-center text-sm text-red-600"
+						>
+							{unfoldError}
+						</div>
+					{/if}
+				</div>
+			</div>
+		{:else}
+			<div class="flex-1 overflow-auto p-4">
 				<div class="text-sm text-gray-600">
 					<p>Окно: {title}</p>
 					<p class="mt-2 text-xs text-gray-400">Перетащите за заголовок для перемещения.</p>
 				</div>
-			{/if}
-		</div>
-	{/if}
+			</div>
+		{/if}
 
-	{#if title.startsWith('График: ') || isUnfoldWindow}
-		<button
-			onmousedown={handleResizeStart}
-			aria-label="Изменить размер окна"
-			class="no-drag absolute right-1 bottom-1 flex h-4 w-4 cursor-nwse-resize items-end justify-end text-gray-400 transition-colors select-none hover:text-blue-600"
-			style="touch-action: none;"
-		>
-			<svg
-				xmlns="http://www.w3.org/2000/svg"
-				width="10"
-				height="10"
-				viewBox="0 0 10 10"
-				fill="none"
+		{#if title.startsWith('График: ') || isUnfoldWindow}
+			<button
+				onmousedown={handleResizeStart}
+				aria-label="Изменить размер окна"
+				class="no-drag absolute right-1 bottom-1 flex h-4 w-4 cursor-nwse-resize items-end justify-end text-gray-400 transition-colors select-none hover:text-blue-600"
+				style="touch-action: none;"
 			>
-				<path
-					d="M0 10 L10 0 M0 6 L6 0 M4 10 L10 4"
-					stroke="currentColor"
-					stroke-width="1.2"
-					stroke-linecap="round"
-				/>
-			</svg>
-		</button>
+				<svg
+					xmlns="http://www.w3.org/2000/svg"
+					width="10"
+					height="10"
+					viewBox="0 0 10 10"
+					fill="none"
+				>
+					<path
+						d="M0 10 L10 0 M0 6 L6 0 M4 10 L10 4"
+						stroke="currentColor"
+						stroke-width="1.2"
+						stroke-linecap="round"
+					/>
+				</svg>
+			</button>
+		{/if}
 	{/if}
 </div>

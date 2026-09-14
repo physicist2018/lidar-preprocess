@@ -6,7 +6,6 @@ import {
 	glueToAnalog,
 	glueToPhoton
 } from 'licelfile-js';
-import { saveSession, loadSession } from './persistence';
 import { computeMolecularRaw, anchorMolecular } from '$lib/molecular';
 
 // ---------------------------------------------------------------------------
@@ -20,8 +19,51 @@ export const files = writable(
 
 /** Non-modal application windows ("график", "развертка", ...). */
 export const openWindows = writable(
-	/** @type {Array<{ id: number, title: string, x: number, y: number, payload?: any }>} */ ([])
+	/** @type {Array<{ id: number, title: string, x: number, y: number, width: number | null, height: number | null, z: number, collapsed: boolean, maximized: boolean, view: any, payload?: any }>} */ ([])
 );
+
+/**
+ * Width of the left file panel in percent. Part of the workspace snapshot.
+ */
+export const leftPanelPercent = writable(20);
+
+/**
+ * Bumped on every session apply so the window container is hard-remounted and
+ * every NonModalWindow is rebuilt from scratch (plotly instances included).
+ */
+export const sessionEpoch = writable(0);
+
+// Global z-order counter for windows; seeded from the loaded snapshot. Kept
+// here (shared by every window) instead of per-component so window records can
+// persist their stacking order across sessions.
+let windowZCounter = 100;
+
+/** @returns {number} */
+export function nextWindowZ() {
+	return ++windowZCounter;
+}
+
+/** @param {number} z */
+export function seedWindowZ(z) {
+	if (Number.isFinite(z) && z > windowZCounter) windowZCounter = Math.floor(z);
+}
+
+/**
+ * Merge a patch into a window record (geometry, z-order, collapse/maximize
+ * flags, view state). Called by NonModalWindow whenever the user changes any
+ * of those so a manual save always captures the live layout.
+ * @param {number} id
+ * @param {any} patch
+ */
+export function updateWindowState(id, patch) {
+	const current = get(openWindows);
+	openWindows.set(current.map((w) => (w.id === id ? { ...w, ...patch } : w)));
+}
+
+/** @param {number} n */
+export function seedNextId(n) {
+	nextId = Math.max(nextId, n);
+}
 
 /** Message shown in the error dialog ('' hides it). */
 export const errorMessage = writable('');
@@ -286,7 +328,7 @@ function medianValue(values) {
  * @param {Map<number, any>} map
  * @param {number[] | null} touchedIds
  */
-function publishLicelData(map, touchedIds) {
+export function publishLicelData(map, touchedIds) {
 	licelFiles.set(map);
 	licelDataTouched.set(touchedIds);
 }
@@ -321,8 +363,6 @@ export async function deleteSelected() {
 		if (!removedIds.has(id)) nextData.set(id, lf);
 	}
 	publishLicelData(nextData, [...removedIds]);
-
-	await persistSession();
 }
 
 // ---------------------------------------------------------------------------
@@ -518,7 +558,6 @@ export async function removeBackground(params = {}) {
 	refreshFileSizes(selected);
 
 	backgroundRemoval.set({ method: 'average', height: '', referenceFile: null });
-	await persistSession();
 }
 
 // ---------------------------------------------------------------------------
@@ -570,7 +609,6 @@ export async function medianFiltering(windowSize) {
 	publishLicelData(new Map(data), selected);
 
 	medianFilter.set({ windowSize: '' });
-	await persistSession();
 }
 
 // ---------------------------------------------------------------------------
@@ -752,7 +790,6 @@ export async function mergeChannels(params = {}) {
 
 	publishLicelData(new Map(data), touched);
 	refreshFileSizes(touched);
-	await persistSession();
 
 	if (skipped.length > 0) {
 		showError(
@@ -766,10 +803,14 @@ export async function mergeChannels(params = {}) {
 // ---------------------------------------------------------------------------
 
 /**
- * Trim every channel of every selected file to the given maximum height (meters).
- * A profile whose length is already within the limit (or shorter than one bin)
- * is left untouched. Profiles are trimmed per their own bin width, so the same
- * distance may yield a different number of retained points per channel.
+ * Trim every channel of every selected file so that the maximum displayed
+ * height z = r · cos(zenithAngle) stays within the limit. The height axis of
+ * graph windows is derived from the pristine distances (j · binWidth) scaled by
+ * cos(zenithAngle), so a channel keeps the first
+ * floor(maxHeight / (binWidth · cos(zenithAngle))) bins. A profile whose
+ * length is already within the limit (or shorter than one bin) is left
+ * untouched. Profiles are trimmed per their own bin width, so the same height
+ * may yield a different number of retained points per channel.
  * @param {number} maxHeight
  */
 export async function cropByHeight(maxHeight) {
@@ -780,6 +821,13 @@ export async function cropByHeight(maxHeight) {
 		return;
 	}
 
+	const alphaRad = (get(zenithAngle) * Math.PI) / 180;
+	const cosZenith = Math.cos(alphaRad);
+	if (!(cosZenith > 0.05)) {
+		showError('Зенитный угол слишком велик для обрезки по высоте.');
+		return;
+	}
+
 	const data = get(licelFiles);
 	forEachProfile(
 		data,
@@ -787,7 +835,7 @@ export async function cropByHeight(maxHeight) {
 		(p) => {
 			if (!(p.binWidth > 0)) return;
 			const total = Number.isFinite(p.nDataPoints) ? p.nDataPoints : p.data.length;
-			const keep = Math.min(Math.floor(maxHeight / p.binWidth), total);
+			const keep = Math.min(Math.floor(maxHeight / (p.binWidth * cosZenith)), total);
 			if (keep >= total || keep < 1) return;
 			p.data = p.data.slice(0, keep);
 			p.nDataPoints = p.data.length;
@@ -801,7 +849,6 @@ export async function cropByHeight(maxHeight) {
 	refreshFileSizes(selected);
 
 	cropByHeightConfig.set({ maxHeight: '' });
-	await persistSession();
 }
 
 // ---------------------------------------------------------------------------
@@ -946,7 +993,6 @@ export async function applyMolecularAnchoring(params = {}) {
 	molecularState.set({ meteo, sourceName, zMin: zMinValue, zMax: zMaxValue });
 	publishLicelData(new Map(data), selected);
 	refreshFileSizes(selected);
-	await persistSession();
 }
 
 // ---------------------------------------------------------------------------
@@ -973,7 +1019,6 @@ export async function setZenithAngle(alphaDeg) {
 	}
 	if (alphaDeg === get(zenithAngle)) return true;
 	zenithAngle.set(alphaDeg);
-	await persistSession();
 	return true;
 }
 
@@ -1132,7 +1177,6 @@ export async function averageSelectedFiles() {
 	const nextData = new Map(data);
 	nextData.set(id, averagedFile);
 	publishLicelData(nextData, [id]);
-	await persistSession();
 }
 
 // ---------------------------------------------------------------------------
@@ -1406,6 +1450,12 @@ export function addWindow(title, position, payload) {
 			title,
 			x: position?.x ?? 20 + Math.random() * 100,
 			y: position?.y ?? 20 + Math.random() * 50,
+			width: null,
+			height: null,
+			z: nextWindowZ(),
+			collapsed: false,
+			maximized: false,
+			view: null,
 			payload
 		}
 	]);
@@ -1475,7 +1525,7 @@ export function savePackToZip() {
 }
 
 // ---------------------------------------------------------------------------
-// Zip loading & session persistence
+// Zip loading
 // ---------------------------------------------------------------------------
 
 let nextId = 1;
@@ -1562,118 +1612,10 @@ function loadPackFromZip(bytes, label) {
  * @returns {Promise<boolean>}
  */
 export async function openFiles(buffer, zipName) {
-	const ok = loadPackFromZip(new Uint8Array(buffer), zipName);
-	if (ok) await persistSession();
-	return ok;
-}
-
-/**
- * Save the current working dataset (files + parsed LicelFile data) to IndexedDB.
- * Called after loading a zip and after every operation that changes the data.
- */
-export async function persistSession() {
-	const current = get(files);
-	const data = get(licelFiles);
-
-	/** @type {Array<{ id: number, name: string, size: string, selected: boolean, lf: any }>} */
-	const rows = [];
-	for (const f of current) {
-		const lf = data.get(f.id);
-		if (!lf) continue;
-		rows.push({
-			id: f.id,
-			name: f.name,
-			size: formatSize(licelFileBytes(lf)),
-			selected: false,
-			lf
-		});
-	}
-
-	try {
-		await saveSession({
-			version: 2,
-			zenithAngle: get(zenithAngle),
-			molecular: get(molecularState),
-			rows
-		});
-	} catch (err) {
-		const detail = err instanceof Error ? err.message : String(err);
-		showError(`Не удалось сохранить данные в браузере: ${detail}`);
-	}
-}
-
-let restoreStarted = false;
-
-/**
- * Restore the previously persisted dataset on application start (client only).
- */
-export async function restoreSession() {
-	if (restoreStarted) return;
-	restoreStarted = true;
-
-	/** @type {any} */
-	let snapshot = null;
-	try {
-		snapshot = await loadSession();
-	} catch (err) {
-		const detail = err instanceof Error ? err.message : String(err);
-		console.error('restoreSession: failed to load', detail);
-		return;
-	}
-	if (!snapshot || !Array.isArray(snapshot.rows)) return;
-
-	const items = [];
-	const fileMap = new Map();
-	let maxId = 0;
-	for (const item of snapshot.rows) {
-		if (!item || typeof item.name !== 'string' || !item.lf) continue;
-		const id = Number.isFinite(item.id) ? item.id : nextId++;
-		items.push({
-			id,
-			name: item.name,
-			size: typeof item.size === 'string' ? item.size : '—',
-			selected: false
-		});
-		fileMap.set(id, item.lf);
-		maxId = Math.max(maxId, id);
-	}
-
-	nextId = maxId + 1;
-	const angle = snapshot.zenithAngle;
-	if (Number.isFinite(angle) && angle >= 0 && angle <= 80 && angle !== get(zenithAngle))
-		zenithAngle.set(angle);
-	restoreMolecularState(snapshot.molecular);
-	files.set(items);
-	publishLicelData(fileMap, null);
+	return loadPackFromZip(new Uint8Array(buffer), zipName);
 }
 
 /** @param {any} x */
 function isNumericProfile(x) {
 	return x && (Array.isArray(x) || ArrayBuffer.isView(x));
-}
-
-/**
- * Restore the molecular anchoring state ({meteo, sourceName, zMin, zMax}) from
- * a persisted session snapshot. Silently ignores malformed records so old
- * sessions without the field keep working unchanged.
- * @param {any} state
- */
-function restoreMolecularState(state) {
-	if (!state || typeof state !== 'object') return;
-	const meteo = state.meteo;
-	const isFlatProfile =
-		meteo &&
-		isNumericProfile(meteo.heights) &&
-		isNumericProfile(meteo.press) &&
-		isNumericProfile(meteo.temp) &&
-		meteo.heights.length >= 2 &&
-		meteo.heights.length === meteo.press.length &&
-		meteo.press.length === meteo.temp.length;
-	if (!isFlatProfile) return;
-	molecularState.set({
-		meteo,
-		sourceName: typeof state.sourceName === 'string' ? state.sourceName : '',
-		zMin: typeof state.zMin === 'number' && Number.isFinite(state.zMin) ? state.zMin : 0,
-		zMax: typeof state.zMax === 'number' && Number.isFinite(state.zMax) ? state.zMax : 0
-	});
 }
