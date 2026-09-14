@@ -1,7 +1,7 @@
 <script>
 	import { files, toggleFile } from '$lib/state/store';
 
-	let fileItems = $state([]);
+	let fileItems = $state(/** @type {Array<any>} */ ([]));
 	let { onDoubleClick } = $props();
 
 	$effect(() => {
