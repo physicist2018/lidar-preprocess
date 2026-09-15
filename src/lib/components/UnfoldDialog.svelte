@@ -77,7 +77,7 @@
 				{:else if channelOptions.length === 0}
 					<p class="text-sm text-gray-500">В выбранных файлах нет каналов с данными.</p>
 				{:else}
-					<div class="space-y-1.5">
+					<div class="grid grid-cols-2 gap-1.5">
 						{#each channelOptions as ch (ch.key)}
 							<label
 								class="flex cursor-pointer items-center gap-2 rounded border border-gray-200 px-2 py-1.5 transition-colors hover:bg-gray-50 {selectedChannelKey ===
