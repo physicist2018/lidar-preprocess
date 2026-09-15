@@ -10,6 +10,13 @@
 	let selectedTransform = $state('P');
 	let totalSelected = $state(0);
 
+	/** Fall back to the plain signal transform when the scattering ratio is unavailable. */
+	function applyRatioFallback(/** @type {any} */ channel) {
+		if (selectedTransform === 'SR' && (!channel || channel.molecularCount !== channel.fileCount)) {
+			selectedTransform = 'P';
+		}
+	}
+
 	function recompute() {
 		const selected = get(files).filter((f) => f.selected);
 		totalSelected = selected.length;
@@ -18,6 +25,7 @@
 		if (!opts.some((o) => o.key === selectedChannelKey)) {
 			selectedChannelKey = opts[0]?.key ?? '';
 		}
+		applyRatioFallback(opts.find((o) => o.key === selectedChannelKey));
 	}
 
 	$effect(() => {
@@ -29,7 +37,18 @@
 		};
 	});
 
-	const canBuild = $derived(Boolean(selectedChannelKey) && totalSelected > 0);
+	const selectedChannel = $derived(
+		channelOptions.find((o) => o.key === selectedChannelKey) ?? null
+	);
+	/** Whether the selected channel has a computed molecular profile in every selected file. */
+	const ratioAvailable = $derived(
+		Boolean(selectedChannel && selectedChannel.molecularCount === selectedChannel.fileCount)
+	);
+	const canBuild = $derived(
+		Boolean(selectedChannelKey) &&
+			totalSelected > 0 &&
+			(selectedTransform !== 'SR' || ratioAvailable)
+	);
 
 	function handleBuild() {
 		if (!canBuild) return;
@@ -90,7 +109,10 @@
 									name="unfoldChannel"
 									value={ch.key}
 									checked={selectedChannelKey === ch.key}
-									onchange={() => (selectedChannelKey = ch.key)}
+									onchange={() => {
+										selectedChannelKey = ch.key;
+										applyRatioFallback(ch);
+									}}
 									class="accent-blue-600"
 								/>
 								<div class="min-w-0">
@@ -112,12 +134,18 @@
 				</h3>
 				<div class="space-y-1.5">
 					{#each UNFOLD_TRANSFORMS as t (t.id)}
-						<label class="flex cursor-pointer items-center gap-2">
+						{@const srDisabled = t.id === 'SR' && !ratioAvailable}
+						<label
+							class="flex cursor-pointer items-center gap-2 {srDisabled
+								? 'cursor-not-allowed opacity-50'
+								: ''}"
+						>
 							<input
 								type="radio"
 								name="unfoldTransform"
 								value={t.id}
 								checked={selectedTransform === t.id}
+								disabled={srDisabled}
 								onchange={() => (selectedTransform = t.id)}
 								class="accent-blue-600"
 							/>
@@ -125,6 +153,12 @@
 						</label>
 					{/each}
 				</div>
+				{#if !ratioAvailable}
+					<p class="mt-2 text-xs text-gray-400">
+						«Ослабленное отношение рассеяния» недоступно: рассчитайте профиль молекулярного
+						рассеяния («Молекулярная привязка») для всех выбранных файлов.
+					</p>
+				{/if}
 			</div>
 		</div>
 

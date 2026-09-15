@@ -262,9 +262,11 @@ export function sameChannelAxis(a, b) {
  * classifier. Each channel is keyed by `profileKey`; lists are sorted by
  * wavelength, device and polarization. Shared by the graph/unfold channel
  * picker and the merge dialog so their channel lists cannot drift apart.
+ * A channel's `molecularCount` is the number of selected files in which the
+ * channel already carries a computed pure molecular profile.
  * @param {number[]} fileIds
  * @param {(p: any) => string} [classify] group name; empty string skips the profile
- * @returns {Map<string, Array<{ key: string, label: string, fileCount: number, wavelength: number, deviceID: string, polarization: string }>>}
+ * @returns {Map<string, Array<{ key: string, label: string, fileCount: number, molecularCount: number, wavelength: number, deviceID: string, polarization: string }>>}
  */
 function collectDistinctChannels(fileIds, classify = () => 'all') {
 	const data = get(licelFiles);
@@ -281,13 +283,16 @@ function collectDistinctChannels(fileIds, classify = () => 'all') {
 		}
 		const key = profileKey(p);
 		const entry = found.get(key);
+		const hasMolecular = Boolean(p.molecular && p.molecular.data && p.molecular.data.length > 0);
 		if (entry) {
 			entry.fileCount++;
+			if (hasMolecular) entry.molecularCount++;
 		} else {
 			found.set(key, {
 				key,
 				label: profileLabel(p),
 				fileCount: 1,
+				molecularCount: hasMolecular ? 1 : 0,
 				wavelength: p.wavelength,
 				deviceID: p.deviceID,
 				polarization: p.polarization
@@ -1196,7 +1201,8 @@ export const UNFOLD_TRANSFORMS = [
 	{ id: 'P', label: 'Исходный сигнал P', short: 'P' },
 	{ id: 'Pr2', label: 'P·r²', short: 'P·r²' },
 	{ id: 'symlogP', label: 'symlog(P)', short: 'symlog(P)' },
-	{ id: 'symlogPr2', label: 'symlog(P·r²)', short: 'symlog(P·r²)' }
+	{ id: 'symlogPr2', label: 'symlog(P·r²)', short: 'symlog(P·r²)' },
+	{ id: 'SR', label: 'Ослабленное отношение рассеяния', short: 'P/P_мол' }
 ];
 
 /** Maximum heatmap grid resolution; larger inputs are uniformly decimated. */
@@ -1224,7 +1230,7 @@ export function unfoldTransformById(id) {
  * List distinct channels present in the given files, each with the number of
  * files that contain it. Labels and pairing follow the graph window convention.
  * @param {number[]} fileIds
- * @returns {Array<{ key: string, label: string, fileCount: number, wavelength: number, deviceID: string, polarization: string }>}
+ * @returns {Array<{ key: string, label: string, fileCount: number, molecularCount: number, wavelength: number, deviceID: string, polarization: string }>}
  */
 export function listUnfoldChannels(fileIds) {
 	return collectDistinctChannels(fileIds).get('all') ?? [];
@@ -1297,6 +1303,10 @@ function applyUnfoldTransform(v, transform, distance) {
 
 /**
  * Build the heatmap matrix: rows are height bins, columns are files.
+ * For the scattering ratio ('SR') transform each cell is the ratio of the
+ * measured signal to the stored pure molecular profile of the same file
+ * (element-wise over bin index); missing or non-finite molecular values
+ * produce NaN cells that are excluded from the color range.
  * @param {Array<{ time: Date, profile: any }>} measurements
  * @param {number[]} rowIndices
  * @param {number[]} colIndices
@@ -1307,6 +1317,10 @@ function applyUnfoldTransform(v, transform, distance) {
  */
 function computeUnfoldMatrix(measurements, rowIndices, colIndices, binWidth, transform, zFactor) {
 	const cols = measurements.map((m) => m.profile.data);
+	const isRatio = transform === 'SR';
+	const molecular = isRatio
+		? measurements.map((m) => (m.profile.molecular && m.profile.molecular.data) || null)
+		: null;
 	const y = new Array(rowIndices.length);
 	const z = new Array(rowIndices.length);
 	for (let r = 0; r < rowIndices.length; r++) {
@@ -1315,7 +1329,14 @@ function computeUnfoldMatrix(measurements, rowIndices, colIndices, binWidth, tra
 		const distance = (j + 0.5) * binWidth;
 		const row = new Float64Array(colIndices.length);
 		for (let c = 0; c < colIndices.length; c++) {
-			row[c] = applyUnfoldTransform(cols[colIndices[c]][j], transform, distance);
+			if (isRatio) {
+				const mol = molecular ? molecular[colIndices[c]] : null;
+				const denom = mol && j < mol.length ? mol[j] : NaN;
+				const num = cols[colIndices[c]][j];
+				row[c] = denom > 0 && Number.isFinite(num) ? num / denom : NaN;
+			} else {
+				row[c] = applyUnfoldTransform(cols[colIndices[c]][j], transform, distance);
+			}
 		}
 		z[r] = row;
 	}
@@ -1388,6 +1409,17 @@ export function buildUnfoldData(config) {
 	for (const m of measurements) nBins = Math.min(nBins, m.profile.data.length);
 	if (!Number.isFinite(nBins) || nBins < 1) {
 		return { error: 'Канал не содержит данных.' };
+	}
+
+	if (transform === 'SR') {
+		for (const m of measurements) {
+			const mol = m.profile.molecular && m.profile.molecular.data;
+			if (!mol || mol.length < nBins) {
+				return {
+					error: `Для канала ${profileLabel(m.profile)} не рассчитан профиль молекулярного рассеяния. Выполните «Молекулярную привязку» для всех выбранных файлов.`
+				};
+			}
+		}
 	}
 
 	const { indices: rowIndices, downsampled: rowsDownsampled } = decimateIndices(
