@@ -10,10 +10,9 @@ import {
 	openWindows,
 	leftPanelPercent,
 	sessionEpoch,
-	seedNextId,
-	seedWindowZ,
-	MAX_WINDOW_Z
+	seedNextId
 } from './store';
+import { seedWindowZ, MAX_WINDOW_Z } from './windows';
 import {
 	SCHEMA_VERSION,
 	sanitizeSnapshot,

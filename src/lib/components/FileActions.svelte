@@ -1,17 +1,15 @@
 <script>
+	import { files, showError } from '$lib/state/store';
 	import {
-		files,
 		toggleSelectAll,
 		deleteSelected,
 		mergeChannels,
-		openFiles,
-		savePackToZip,
-		addUnfoldWindow,
 		averageSelectedFiles,
 		setZenithAngle,
-		applyMolecularAnchoring,
-		showError
-	} from '$lib/state/store';
+		applyMolecularAnchoring
+	} from '$lib/state/processing';
+	import { openFiles, savePackToZip } from '$lib/state/zip-io';
+	import { addUnfoldWindow } from '$lib/state/windows';
 	import UnfoldDialog from './UnfoldDialog.svelte';
 	import MergeChannelsDialog from './MergeChannelsDialog.svelte';
 	import ZenithAngleDialog from './ZenithAngleDialog.svelte';

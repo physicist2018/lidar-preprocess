@@ -1,18 +1,20 @@
 <script>
 	import {
-		removeWindow,
 		licelFiles,
 		licelDataTouched,
-		buildUnfoldData,
 		savedChannelSelection,
 		rememberChannelSelection,
 		savedYScale,
-		zenithAngle,
+		zenithAngle
+	} from '$lib/state/store';
+	import {
+		removeWindow,
 		nextWindowZ,
 		seedWindowZ,
 		MAX_WINDOW_Z,
 		updateWindowState
-	} from '$lib/state/store';
+	} from '$lib/state/windows';
+	import { buildUnfoldData } from '$lib/state/unfold-data';
 	import { get } from 'svelte/store';
 	import { resampleMolecular } from '$lib/molecular';
 	import { onMount, onDestroy } from 'svelte';

@@ -1,5 +1,6 @@
 <script>
-	import { files, backgroundRemoval, removeBackground, MODAL_Z_INDEX } from '$lib/state/store';
+	import { files, backgroundRemoval, MODAL_Z_INDEX } from '$lib/state/store';
+	import { removeBackground } from '$lib/state/processing';
 	import { get } from 'svelte/store';
 
 	/** @type {{ onClose?: () => void }} */

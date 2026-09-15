@@ -1,11 +1,6 @@
 <script>
-	import {
-		files,
-		medianFilter,
-		medianFiltering,
-		MEDIAN_WINDOW_MAX,
-		MODAL_Z_INDEX
-	} from '$lib/state/store';
+	import { files, medianFilter, MEDIAN_WINDOW_MAX, MODAL_Z_INDEX } from '$lib/state/store';
+	import { medianFiltering } from '$lib/state/processing';
 	import { get } from 'svelte/store';
 
 	/** @type {{ onClose?: () => void }} */
