@@ -18,23 +18,13 @@ import {
 	sanitizeSnapshot,
 	migrateSnapshot,
 	defaultEmptySnapshot,
-	clampWindowsToViewport
+	clampWindowsToViewport,
+	estimateSnapshotBytes
 } from './snapshot-core';
 
-export { SCHEMA_VERSION, migrateSnapshot, clampWindowsToViewport };
+export { SCHEMA_VERSION, migrateSnapshot, clampWindowsToViewport, estimateSnapshotBytes };
 
 const APP_VERSION = '1';
-
-/** @param {any} snapshot @returns {number} rough persisted size in bytes */
-export function estimateSnapshotBytes(snapshot) {
-	let bytes = 512;
-	for (const f of snapshot.files ?? []) {
-		bytes += 256;
-		for (const p of f.lf?.profiles ?? []) bytes += (p.nDataPoints || p.data?.length || 0) * 4;
-	}
-	bytes += (snapshot.windows?.length ?? 0) * 128;
-	return bytes;
-}
 
 // ---------------------------------------------------------------------------
 // Capture

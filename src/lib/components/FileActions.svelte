@@ -9,6 +9,8 @@
 		applyMolecularAnchoring
 	} from '$lib/state/processing';
 	import { openFiles, savePackToZip } from '$lib/state/zip-io';
+	import { downloadBytes } from '$lib/download';
+	import { fileNameStamp } from '$lib/format';
 	import { addUnfoldWindow } from '$lib/state/windows';
 	import UnfoldDialog from './UnfoldDialog.svelte';
 	import MergeChannelsDialog from './MergeChannelsDialog.svelte';
@@ -133,23 +135,7 @@
 	function handleSaveZip() {
 		const bytes = savePackToZip();
 		if (!bytes) return;
-
-		const now = new Date();
-		const pad2 = (/** @type {number} */ n) => String(n).padStart(2, '0');
-		const stamp = `${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}_${pad2(
-			now.getHours()
-		)}${pad2(now.getMinutes())}${pad2(now.getSeconds())}`;
-
-		const url = URL.createObjectURL(
-			new Blob([/** @type {any} */ (bytes)], { type: 'application/zip' })
-		);
-		const link = document.createElement('a');
-		link.href = url;
-		link.download = `lidar_${stamp}.zip`;
-		document.body.appendChild(link);
-		link.click();
-		link.remove();
-		URL.revokeObjectURL(url);
+		downloadBytes(bytes, `lidar_${fileNameStamp()}.zip`);
 	}
 </script>
 

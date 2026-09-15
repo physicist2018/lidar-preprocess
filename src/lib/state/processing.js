@@ -27,7 +27,8 @@ import {
 } from '$lib/channels';
 import { computeMolecularRaw, anchorMolecular } from '$lib/molecular';
 import { loadLicelFileFromBuffer, glueToAnalog, glueToPhoton } from 'licelfile-js';
-import { refreshFileSizes, licelFileBytes } from './zip-io';
+import { refreshFileSizes } from './zip-io';
+import { estimateLicelFileBytes } from '$lib/size';
 import { formatBytes } from '$lib/format';
 
 /**
@@ -843,7 +844,7 @@ export async function averageSelectedFiles() {
 
 	files.set([
 		...get(files),
-		{ id, name, size: formatBytes(licelFileBytes(averagedFile)), selected: false }
+		{ id, name, size: formatBytes(estimateLicelFileBytes(averagedFile)), selected: false }
 	]);
 	const nextData = new Map(data);
 	nextData.set(id, averagedFile);

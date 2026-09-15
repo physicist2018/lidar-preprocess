@@ -10,20 +10,12 @@ import {
 	nextFileId
 } from './store';
 import { formatBytes } from '$lib/format';
+import { estimateLicelFileBytes } from '$lib/size';
 
 /** @param {string} name */
 function basename(name) {
 	const idx = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
 	return idx >= 0 ? name.slice(idx + 1) : name;
-}
-
-/** @param {any} lf */
-export function licelFileBytes(lf) {
-	let bytes = 256; // header overhead approximation
-	for (const p of lf.profiles) {
-		bytes += (p.nDataPoints || 0) * 4;
-	}
-	return bytes;
 }
 
 /**
@@ -39,7 +31,7 @@ export function refreshFileSizes(ids) {
 			if (idSet && !idSet.has(f.id)) return f;
 			const lf = data.get(f.id);
 			if (!lf) return f;
-			return { ...f, size: formatBytes(licelFileBytes(lf)) };
+			return { ...f, size: formatBytes(estimateLicelFileBytes(lf)) };
 		})
 	);
 }
@@ -110,7 +102,7 @@ function loadPackFromZip(bytes, label) {
 		for (const [path, lf] of pack.data) {
 			const id = nextFileId();
 			const name = path.replace(/^\/+/, '');
-			items.push({ id, name, size: formatBytes(licelFileBytes(lf)), selected: false });
+			items.push({ id, name, size: formatBytes(estimateLicelFileBytes(lf)), selected: false });
 			fileMap.set(id, lf);
 		}
 
