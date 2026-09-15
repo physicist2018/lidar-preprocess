@@ -1,5 +1,5 @@
 <script>
-	import { files, molecularState } from '$lib/state/store';
+	import { files, molecularState, MODAL_Z_INDEX } from '$lib/state/store';
 	import { parseMeteoFile } from '$lib/molecular';
 	import { get } from 'svelte/store';
 
@@ -95,7 +95,10 @@
 	}
 </script>
 
-<div class="fixed inset-0 flex items-center justify-center bg-black/40 p-4" style="z-index: 10000">
+<div
+	class="fixed inset-0 flex items-center justify-center bg-black/40 p-4"
+	style="z-index: {MODAL_Z_INDEX}"
+>
 	<div
 		role="dialog"
 		aria-modal="true"

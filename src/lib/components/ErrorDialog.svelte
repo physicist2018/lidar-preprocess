@@ -1,5 +1,5 @@
-	<script>
-	import { errorMessage, clearError } from '$lib/state/store';
+<script>
+	import { errorMessage, clearError, MODAL_Z_INDEX } from '$lib/state/store';
 
 	let message = $state('');
 
@@ -12,7 +12,10 @@
 </script>
 
 {#if message}
-	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+	<div
+		class="fixed inset-0 flex items-center justify-center bg-black/40 p-4"
+		style="z-index: {MODAL_Z_INDEX}"
+	>
 		<div
 			role="alertdialog"
 			aria-modal="true"

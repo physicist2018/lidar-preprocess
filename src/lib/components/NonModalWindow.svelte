@@ -10,6 +10,7 @@
 		zenithAngle,
 		nextWindowZ,
 		seedWindowZ,
+		MAX_WINDOW_Z,
 		updateWindowState
 	} from '$lib/state/store';
 	import { get } from 'svelte/store';
@@ -54,7 +55,7 @@
 	let isDragging = $state(false);
 	let dragOffset = { x: 0, y: 0 };
 	seedWindowZ(z ?? 0);
-	let zIndex = $state(z ?? nextWindowZ());
+	let zIndex = $state(Number.isFinite(z) ? Math.min(z, MAX_WINDOW_Z) : nextWindowZ());
 	let chartRef = $state(/** @type {HTMLDivElement | null} */ (null));
 	let plotlyInstance = $state(/** @type {any} */ (null));
 	let PlotlyLib = /** @type {any} */ (null);

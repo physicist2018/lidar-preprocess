@@ -12,6 +12,7 @@
 		beginEmptySession,
 		isDirty
 	} from '$lib/state/sessions';
+	import { MODAL_Z_INDEX } from '$lib/state/store';
 	import { onMount } from 'svelte';
 
 	let { onClose } = $props();
@@ -151,7 +152,8 @@
 </script>
 
 <div
-	class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/40 backdrop-blur-sm"
+	class="fixed inset-0 flex items-center justify-center bg-gray-900/40 backdrop-blur-sm"
+	style="z-index: {MODAL_Z_INDEX}"
 	onmousedown={(e) => {
 		if (e.target === e.currentTarget) onClose?.();
 	}}

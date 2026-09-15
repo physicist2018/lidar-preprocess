@@ -11,7 +11,8 @@ import {
 	leftPanelPercent,
 	sessionEpoch,
 	seedNextId,
-	seedWindowZ
+	seedWindowZ,
+	MAX_WINDOW_Z
 } from './store';
 import {
 	SCHEMA_VERSION,
@@ -160,6 +161,9 @@ export function applySnapshot(snapshot) {
 	publishLicelData(fileMap, null);
 
 	clampWindowsToViewport(s.windows);
+	for (const w of s.windows) {
+		if (Number.isFinite(w.z) && w.z > MAX_WINDOW_Z) w.z = MAX_WINDOW_Z;
+	}
 	openWindows.set(s.windows);
 	let maxZ = 0;
 	for (const w of s.windows) maxZ = Math.max(maxZ, Number.isFinite(w.z) ? w.z : 0);

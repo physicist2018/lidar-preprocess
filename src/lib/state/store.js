@@ -33,6 +33,20 @@ export const leftPanelPercent = writable(20);
  */
 export const sessionEpoch = writable(0);
 
+/**
+ * CSS z-index reserved for modal overlays. Every modal dialog renders at exactly
+ * this value so it always stays above non-modal windows no matter how long the
+ * session runs. Non-modal windows allocate z-indexes strictly below it.
+ */
+export const MODAL_Z_INDEX = 100000;
+
+/**
+ * Ceiling of the z-order counter for non-modal windows, just under the modal
+ * band. The counter starts at WINDOW_Z_BASE and is bounded, so window stacking
+ * can never overtake modal overlays again.
+ */
+export const MAX_WINDOW_Z = MODAL_Z_INDEX - 1;
+
 // Global z-order counter for windows; seeded from the loaded snapshot. Kept
 // here (shared by every window) instead of per-component so window records can
 // persist their stacking order across sessions.
@@ -40,12 +54,34 @@ let windowZCounter = 100;
 
 /** @returns {number} */
 export function nextWindowZ() {
+	if (windowZCounter >= MAX_WINDOW_Z) normalizeWindowZ();
 	return ++windowZCounter;
 }
 
 /** @param {number} z */
 export function seedWindowZ(z) {
-	if (Number.isFinite(z) && z > windowZCounter) windowZCounter = Math.floor(z);
+	if (Number.isFinite(z) && z > windowZCounter) {
+		// Clamp so a snapshot saved when window z-indexes were unbounded can
+		// never place a window inside or above the modal band.
+		windowZCounter = Math.min(Math.floor(z), MAX_WINDOW_Z);
+	}
+}
+
+/**
+ * Renumber every open window into a compact [101, …] range preserving the
+ * current relative order, then restart the counter so window z-indexes keep
+ * growing without ever reaching the modal band.
+ */
+function normalizeWindowZ() {
+	const current = get(openWindows);
+	const sorted = [...current].sort(
+		(a, b) => (Number.isFinite(a.z) ? a.z : 0) - (Number.isFinite(b.z) ? b.z : 0)
+	);
+	sorted.forEach((w, i) => {
+		w.z = 100 + i + 1;
+	});
+	openWindows.set(sorted);
+	windowZCounter = 100 + sorted.length;
 }
 
 /**

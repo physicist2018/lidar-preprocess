@@ -1,5 +1,11 @@
 <script>
-	import { files, licelFiles, listMergeChannels, sameChannelAxis } from '$lib/state/store';
+	import {
+		files,
+		licelFiles,
+		listMergeChannels,
+		sameChannelAxis,
+		MODAL_Z_INDEX
+	} from '$lib/state/store';
 	import { get } from 'svelte/store';
 	import { onMount } from 'svelte';
 
@@ -102,7 +108,10 @@
 	}
 </script>
 
-<div class="fixed inset-0 flex items-center justify-center bg-black/40 p-4" style="z-index: 10000">
+<div
+	class="fixed inset-0 flex items-center justify-center bg-black/40 p-4"
+	style="z-index: {MODAL_Z_INDEX}"
+>
 	<div
 		role="dialog"
 		aria-modal="true"
