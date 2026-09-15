@@ -5,6 +5,7 @@
     "": {
       "name": "lidar-sveltekit",
       "dependencies": {
+        "fflate": "^0.8.3",
         "licelfile-js": "^1.2.0",
         "plotly.js-dist-min": "^4.0.0",
       },

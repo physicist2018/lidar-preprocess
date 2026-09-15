@@ -12,6 +12,8 @@
 		beginEmptySession,
 		isDirty
 	} from '$lib/state/sessions';
+	import { exportSessionToArchive, importSessionFromArchive } from '$lib/state/archive-transfer';
+	import { downloadBytes } from '$lib/download';
 	import { MODAL_Z_INDEX } from '$lib/state/store';
 	import { onMount } from 'svelte';
 
@@ -23,6 +25,8 @@
 	let autoOpen = $state(false);
 	let busy = $state(false);
 	let error = $state('');
+	let notice = $state('');
+	let importInput = $state(/** @type {HTMLInputElement | null} */ (null));
 
 	async function refresh() {
 		items = await listSessions();
@@ -149,6 +153,59 @@
 		autoOpen = !autoOpen;
 		await setAutoOpenLast(autoOpen);
 	}
+
+	/** @param {string} id */
+	async function handleExport(id) {
+		const item = items.find((s) => s.id === id);
+		if (!item) return;
+		busy = true;
+		error = '';
+		notice = '';
+		try {
+			const res = await exportSessionToArchive(id);
+			if (res.ok) {
+				downloadBytes(res.bytes, res.fileName);
+				notice = `Экспортирована сессия «${item.name}»`;
+			} else {
+				error = res.message ?? 'Не удалось экспортировать сессию';
+			}
+		} catch (err) {
+			error = `Не удалось экспортировать сессию: ${
+				err instanceof Error ? err.message : String(err)
+			}`;
+		} finally {
+			busy = false;
+		}
+	}
+
+	/** @param {Event} e */
+	async function handleImport(e) {
+		const input = /** @type {HTMLInputElement | null} */ (e.target);
+		const file = input?.files?.[0];
+		if (!file) return;
+		busy = true;
+		error = '';
+		notice = '';
+		try {
+			const buffer = await file.arrayBuffer();
+			const res = await importSessionFromArchive(new Uint8Array(buffer));
+			if (res.ok) {
+				refresh();
+				if (res.warnings && res.warnings.length > 0) {
+					notice = `Импортирована сессия «${res.name}». ${res.warnings.join(' ')}`;
+				} else {
+					onClose?.();
+				}
+			} else {
+				error = res.message ?? 'Не удалось импортировать сессию';
+			}
+		} catch (err) {
+			error = `Не удалось прочитать файл: ${err instanceof Error ? err.message : String(err)}`;
+		} finally {
+			if (input) input.value = '';
+			busy = false;
+		}
+	}
 </script>
 
 <div
@@ -185,6 +242,13 @@
 			{#if error}
 				<div class="mb-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
 					{error}
+				</div>
+			{/if}
+			{#if notice}
+				<div
+					class="mb-2 rounded border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-700"
+				>
+					{notice}
 				</div>
 			{/if}
 			{#if items.length === 0}
@@ -260,6 +324,14 @@
 									⧉
 								</button>
 								<button
+									onclick={() => handleExport(item.id)}
+									disabled={busy}
+									title="Экспорт в ZIP"
+									class="flex h-7 w-7 items-center justify-center rounded bg-gray-100 text-xs text-gray-600 hover:bg-gray-200 disabled:opacity-40"
+								>
+									⇓
+								</button>
+								<button
 									onclick={() => {
 										renamingId = renamingId === item.id ? null : item.id;
 										pendingName = item.name;
@@ -320,6 +392,20 @@
 					Начать без сессии
 				</button>
 			</div>
+			<input
+				bind:this={importInput}
+				type="file"
+				accept=".zip"
+				class="hidden"
+				onchange={handleImport}
+			/>
+			<button
+				onclick={() => importInput?.click()}
+				disabled={busy}
+				class="w-full rounded bg-blue-50 px-3 py-1.5 text-xs text-blue-700 transition-colors hover:bg-blue-100 disabled:opacity-40"
+			>
+				Импорт сессии из ZIP
+			</button>
 		</div>
 	</div>
 </div>
