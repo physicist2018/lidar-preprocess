@@ -29,6 +29,7 @@ import {
 	licelFiles,
 	zenithAngle,
 	savedChannelSelection,
+	savedYScale,
 	molecularState,
 	leftPanelPercent,
 	showError
@@ -78,6 +79,7 @@ const dirtyStores = [
 	openWindows,
 	zenithAngle,
 	savedChannelSelection,
+	savedYScale,
 	molecularState,
 	leftPanelPercent,
 	licelFiles

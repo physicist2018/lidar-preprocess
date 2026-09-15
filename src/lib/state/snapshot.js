@@ -6,6 +6,7 @@ import {
 	zenithAngle,
 	molecularState,
 	savedChannelSelection,
+	savedYScale,
 	openWindows,
 	leftPanelPercent,
 	sessionEpoch,
@@ -78,7 +79,8 @@ export function emptySnapshot() {
 		settings: {
 			zenithAngle: get(zenithAngle),
 			molecular: get(molecularState),
-			savedChannelSelection: get(savedChannelSelection)
+			savedChannelSelection: get(savedChannelSelection),
+			savedYScale: get(savedYScale)
 		},
 		files: [],
 		windows: []
@@ -114,7 +116,8 @@ export function captureSnapshot() {
 		settings: {
 			zenithAngle: get(zenithAngle),
 			molecular: get(molecularState),
-			savedChannelSelection: get(savedChannelSelection)
+			savedChannelSelection: get(savedChannelSelection),
+			savedYScale: get(savedYScale)
 		},
 		files: rows,
 		windows: get(openWindows)
@@ -150,6 +153,7 @@ export function applySnapshot(snapshot) {
 	if (angle !== get(zenithAngle)) zenithAngle.set(angle);
 	molecularState.set(s.settings.molecular ?? { meteo: null, sourceName: '', zMin: 0, zMax: 0 });
 	savedChannelSelection.set(s.settings.savedChannelSelection);
+	savedYScale.set(s.settings.savedYScale === 'log' ? 'log' : 'linear');
 	leftPanelPercent.set(s.ui.leftPanelPercent);
 
 	files.set(items);

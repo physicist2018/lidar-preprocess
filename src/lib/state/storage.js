@@ -285,7 +285,8 @@ export async function storageMigrateLegacy() {
 						? legacy.zenithAngle
 						: 0,
 				molecular: legacy.molecular,
-				savedChannelSelection: null
+				savedChannelSelection: null,
+				savedYScale: null
 			},
 			files: rows.map((/** @type {any} */ r) => ({
 				id: r.id,

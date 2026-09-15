@@ -113,9 +113,17 @@ export const cropByHeightConfig = writable(
  */
 export const savedChannelSelection = writable(/** @type {Record<string, boolean> | null} */ (null));
 
-/** @param {Record<string, boolean>} states */
-export function rememberChannelSelection(states) {
+/**
+ * OY axis scale ('linear' | 'log') of the graph window remembered together
+ * with the channel selection ("Кнопка 2"); applied to graph windows opened
+ * afterwards.
+ */
+export const savedYScale = writable('linear');
+
+/** @param {Record<string, boolean>} states @param {'linear' | 'log'} [yScale] */
+export function rememberChannelSelection(states, yScale) {
 	savedChannelSelection.set({ ...states });
+	if (yScale === 'log' || yScale === 'linear') savedYScale.set(yScale);
 }
 
 /**
@@ -1597,6 +1605,7 @@ function loadPackFromZip(bytes, label) {
 		files.set(items);
 		publishLicelData(fileMap, null);
 		savedChannelSelection.set(null);
+		savedYScale.set('linear');
 		return true;
 	} catch (err) {
 		const detail = err instanceof Error ? err.message : String(err);

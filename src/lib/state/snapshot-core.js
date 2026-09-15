@@ -81,7 +81,8 @@ export function defaultEmptySnapshot() {
 		settings: {
 			zenithAngle: 0,
 			molecular: defaultMolecularState(),
-			savedChannelSelection: null
+			savedChannelSelection: null,
+			savedYScale: 'linear'
 		},
 		files: [],
 		windows: []
@@ -106,7 +107,7 @@ export function sanitizeUi(ui) {
 /**
  * @param {any} settings
  * @param {string[]} warnings
- * @returns {{ zenithAngle: number, molecular: any, savedChannelSelection: any }}
+ * @returns {{ zenithAngle: number, molecular: any, savedChannelSelection: any, savedYScale: string }}
  */
 export function sanitizeSettings(settings, warnings = []) {
 	const raw = settings && typeof settings === 'object' ? settings : {};
@@ -121,7 +122,9 @@ export function sanitizeSettings(settings, warnings = []) {
 		savedChannelSelection:
 			raw.savedChannelSelection && typeof raw.savedChannelSelection === 'object'
 				? raw.savedChannelSelection
-				: null
+				: null,
+		savedYScale:
+			raw.savedYScale === 'log' || raw.savedYScale === 'linear' ? raw.savedYScale : 'linear'
 	};
 }
 

@@ -6,6 +6,7 @@
 		buildUnfoldData,
 		savedChannelSelection,
 		rememberChannelSelection,
+		savedYScale,
 		zenithAngle,
 		nextWindowZ,
 		seedWindowZ,
@@ -75,8 +76,15 @@
 	let licel = null;
 	/** @type {Array<{ name: string, color: string, points: Array<{ x: number, y: number }>, molecularPoints: Array<{ x: number, y: number }> | null }>} */
 	let channels = [];
-	// Y axis scale of the graph window: 'linear' | 'log'
-	let yScale = $state(view?.yScale === 'log' || view?.yScale === 'linear' ? view.yScale : 'linear');
+	// Y axis scale of the graph window: 'linear' | 'log'. Falls back to the
+	// globally remembered scale ("Кнопка 2"), otherwise linear.
+	let yScale = $state(
+		view?.yScale === 'log' || view?.yScale === 'linear'
+			? view.yScale
+			: get(savedYScale) === 'log'
+				? 'log'
+				: 'linear'
+	);
 	// Zenith angle whose height extent is currently refit into the x axis range.
 	let chartAlpha = /** @type {number | null} */ (null);
 
@@ -546,7 +554,7 @@
 	}
 
 	function handleRememberChannels() {
-		rememberChannelSelection(channelStates);
+		rememberChannelSelection(channelStates, yScale);
 	}
 
 	function handleToggleYScale() {

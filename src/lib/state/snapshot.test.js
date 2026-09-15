@@ -2,6 +2,7 @@ import { describe, it, expect } from 'bun:test';
 import {
 	sanitizeSnapshot,
 	sanitizeWindow,
+	sanitizeSettings,
 	migrateSnapshot,
 	estimateSnapshotBytes,
 	SCHEMA_VERSION,
@@ -95,6 +96,25 @@ describe('sanitizeWindow', () => {
 		expect(w.x).toBe(20);
 		expect(w.z).toBe(0);
 		expect(w.view).toBeNull();
+	});
+});
+
+describe('sanitizeSettings', () => {
+	it('defaults savedYScale to linear when missing or invalid', () => {
+		expect(sanitizeSettings({}).savedYScale).toBe('linear');
+		expect(sanitizeSettings({ savedYScale: 'banana' }).savedYScale).toBe('linear');
+		expect(sanitizeSettings(null).savedYScale).toBe('linear');
+	});
+
+	it('keeps a valid savedYScale', () => {
+		expect(sanitizeSettings({ savedYScale: 'log' }).savedYScale).toBe('log');
+		expect(sanitizeSettings({ savedYScale: 'linear' }).savedYScale).toBe('linear');
+	});
+});
+
+describe('defaultEmptySnapshot', () => {
+	it('includes savedYScale in settings', () => {
+		expect(defaultEmptySnapshot().settings.savedYScale).toBe('linear');
 	});
 });
 
