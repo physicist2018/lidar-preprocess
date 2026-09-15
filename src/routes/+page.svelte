@@ -53,10 +53,6 @@
 		leftPercent = newLeft;
 	}
 
-	function handleAddDemoWindow() {
-		addWindow('Демонстрационное окно');
-	}
-
 	/** @param {any} file */
 	function handleFileDoubleClick(file) {
 		addWindow(`График: ${file.name}`, undefined, { fileId: file.id });
@@ -104,12 +100,6 @@
 				class="rounded bg-blue-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-blue-700"
 			>
 				Сохранить (⌘S)
-			</button>
-			<button
-				onclick={handleAddDemoWindow}
-				class="rounded bg-blue-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-blue-700"
-			>
-				+ Добавить окно
 			</button>
 		</div>
 	</header>
