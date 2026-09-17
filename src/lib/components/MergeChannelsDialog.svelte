@@ -1,11 +1,7 @@
 <script>
-	import {
-		files,
-		licelFiles,
-		listMergeChannels,
-		sameChannelAxis,
-		MODAL_Z_INDEX
-	} from '$lib/state/store';
+	import { files, licelFiles, MODAL_Z_INDEX } from '$lib/state/store';
+	import { listMergeChannels } from '$lib/state/processing';
+	import { sameChannelAxis } from '$lib/channels';
 	import { get } from 'svelte/store';
 	import { onMount } from 'svelte';
 

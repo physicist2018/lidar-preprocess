@@ -1,5 +1,6 @@
 <script>
-	import { files, cropByHeightConfig, cropByHeight, MODAL_Z_INDEX } from '$lib/state/store';
+	import { files, cropByHeightConfig, MODAL_Z_INDEX } from '$lib/state/store';
+	import { cropByHeight } from '$lib/state/processing';
 	import { get } from 'svelte/store';
 
 	/** @type {{ onClose?: () => void }} */

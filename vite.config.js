@@ -65,7 +65,12 @@ export default defineConfig({
 				spa: true
 			},
 			devOptions: {
-				enabled: true
+				enabled: true,
+				// In dev the SPA client assets are served from memory and no pages
+				// are prerendered, so the production globPatterns (client/**, /prerendered)
+				// match nothing in dev-dist. Suppress that benign workbox warning;
+				// production precaching config is unchanged.
+				suppressWarnings: true
 			}
 		})
 	]

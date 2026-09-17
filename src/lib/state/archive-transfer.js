@@ -16,6 +16,7 @@ import {
 	storageDeleteSession
 } from './storage';
 import { openSession, listSessions } from './sessions';
+import { fileNameStamp } from '$lib/format';
 
 const APP_VERSION = '1';
 
@@ -28,15 +29,6 @@ function isQuotaError(err) {
 	const name = String(err?.name ?? '');
 	const message = String(err?.message ?? '');
 	return name === 'QuotaExceededError' || /quota/i.test(`${name} ${message}`);
-}
-
-/** @returns {string} sortable timestamp for download file names */
-function stamp() {
-	const now = new Date();
-	const pad2 = (/** @type {number} */ n) => String(n).padStart(2, '0');
-	return `${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}_${pad2(
-		now.getHours()
-	)}${pad2(now.getMinutes())}${pad2(now.getSeconds())}`;
 }
 
 /**
@@ -70,7 +62,7 @@ export async function exportSessionToArchive(id) {
 	return {
 		ok: true,
 		bytes: built.bytes,
-		fileName: `${sanitizeFileName(meta.name)}_${stamp()}.zip`
+		fileName: `${sanitizeFileName(meta.name)}_${fileNameStamp()}.zip`
 	};
 }
 

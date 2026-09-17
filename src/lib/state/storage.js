@@ -1,3 +1,5 @@
+import { estimateLicelFileBytes } from '$lib/size';
+
 const DB_NAME = 'lidar-viewer';
 const DB_VERSION = 2;
 
@@ -333,8 +335,7 @@ export async function storageMigrateLegacy() {
 function estimateLegacyBytes(snapshot) {
 	let bytes = 0;
 	for (const f of snapshot.files ?? []) {
-		bytes += 256;
-		for (const p of f.lf?.profiles ?? []) bytes += (p.nDataPoints || p.data?.length || 0) * 4;
+		bytes += estimateLicelFileBytes(f.lf ?? { profiles: [] });
 	}
 	return bytes;
 }

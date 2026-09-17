@@ -4,7 +4,8 @@
 	import NonModalWindow from '$lib/components/NonModalWindow.svelte';
 	import ErrorDialog from '$lib/components/ErrorDialog.svelte';
 	import SessionPicker from '$lib/components/SessionPicker.svelte';
-	import { openWindows, addWindow, leftPanelPercent, sessionEpoch } from '$lib/state/store';
+	import { openWindows, leftPanelPercent, sessionEpoch } from '$lib/state/store';
+	import { addWindow } from '$lib/state/windows';
 	import { get } from 'svelte/store';
 	import {
 		boot as bootSessions,

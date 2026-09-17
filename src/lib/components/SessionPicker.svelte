@@ -15,6 +15,7 @@
 	import { exportSessionToArchive, importSessionFromArchive } from '$lib/state/archive-transfer';
 	import { downloadBytes } from '$lib/download';
 	import { MODAL_Z_INDEX } from '$lib/state/store';
+	import { formatBytes, formatDate } from '$lib/format';
 	import { onMount } from 'svelte';
 
 	let { onClose } = $props();
@@ -34,27 +35,6 @@
 	}
 
 	onMount(refresh);
-
-	/** @param {number} n */
-	function formatSize(n) {
-		if (!Number.isFinite(n) || n <= 0) return '';
-		const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-		let value = n;
-		let unit = 0;
-		while (value >= 1024 && unit < units.length - 1) {
-			value /= 1024;
-			unit++;
-		}
-		return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
-	}
-
-	/** @param {string | null} iso */
-	function formatDate(iso) {
-		const d = new Date(iso ?? '');
-		return Number.isFinite(d.getTime())
-			? d.toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
-			: '—';
-	}
 
 	function confirmDiscard() {
 		if (!isDirty()) return true;
@@ -291,8 +271,8 @@
 										{#if item.filesCount || item.windowsCount}
 											· {item.filesCount} ф. · {item.windowsCount} ок.
 										{/if}
-										{#if formatSize(item.dataBytes)}
-											· {formatSize(item.dataBytes)}
+										{#if item.dataBytes > 0}
+											· {formatBytes(item.dataBytes)}
 										{/if}
 									</div>
 								{/if}

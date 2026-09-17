@@ -1,11 +1,6 @@
 <script>
-	import {
-		files,
-		licelFiles,
-		listUnfoldChannels,
-		UNFOLD_TRANSFORMS,
-		MODAL_Z_INDEX
-	} from '$lib/state/store';
+	import { files, licelFiles, MODAL_Z_INDEX } from '$lib/state/store';
+	import { listUnfoldChannels, UNFOLD_TRANSFORMS } from '$lib/state/unfold-data';
 	import { get } from 'svelte/store';
 
 	/** @type {{ onClose?: () => void, onBuild?: (cfg: { fileIds: number[], channelKey: string, transform: string }) => void }} */
