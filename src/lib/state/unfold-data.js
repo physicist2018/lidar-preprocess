@@ -8,8 +8,13 @@ export const UNFOLD_TRANSFORMS = [
 	{ id: 'Pr2', label: 'P·r²', short: 'P·r²' },
 	{ id: 'symlogP', label: 'symlog(P)', short: 'symlog(P)' },
 	{ id: 'symlogPr2', label: 'symlog(P·r²)', short: 'symlog(P·r²)' },
+	{ id: 'asinhP', label: 'asinh(P/ε)', short: 'asinh(P/ε)' },
+	{ id: 'asinhPr2', label: 'asinh(P·r²/ε)', short: 'asinh(P·r²/ε)' },
 	{ id: 'SR', label: 'Ослабленное отношение рассеяния', short: 'P/P_мол' }
 ];
+
+/** Scale factor for the asinh transforms: ε = 1e-6 in P/ε and P·r²/ε. */
+const UNFOLD_ASINH_EPS = 1e-6;
 
 /** Maximum heatmap grid resolution; larger inputs are uniformly decimated. */
 const UNFOLD_MAX_ROWS = 2500;
@@ -104,6 +109,9 @@ function applyUnfoldTransform(v, transform, distance) {
 	if (transform === 'Pr2') return v * distance * distance;
 	if (transform === 'symlogP') return symlogValue(v);
 	if (transform === 'symlogPr2') return symlogValue(v * distance * distance);
+	if (transform === 'asinhP') return Math.asinh(v / UNFOLD_ASINH_EPS);
+	if (transform === 'asinhPr2')
+		return Math.asinh((v * distance * distance) / UNFOLD_ASINH_EPS);
 	return v;
 }
 

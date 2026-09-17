@@ -55,6 +55,8 @@ describe('unfold-data channels and transforms', () => {
 
 	it('resolves transform ids and falls back to the default', () => {
 		expect(unfoldTransformById('symlogP').short).toBe('symlog(P)');
+		expect(unfoldTransformById('asinhP').short).toBe('asinh(P/ε)');
+		expect(unfoldTransformById('asinhPr2').short).toBe('asinh(P·r²/ε)');
 		expect(unfoldTransformById('nope')).toBe(UNFOLD_TRANSFORMS[0]);
 	});
 });
@@ -77,6 +79,31 @@ describe('buildUnfoldData', () => {
 		expect(Array.from(res.z[3])).toEqual([40, 50]);
 		expect(res.zMin).toBeDefined();
 		expect(res.zMax).toBeGreaterThan(res.zMin);
+	});
+
+	it('builds the asinh(P/ε) transform matrix', () => {
+		licelFiles.set(sampleData());
+		zenithAngle.set(0);
+		const res = /** @type {any} */ (
+			buildUnfoldData({ fileIds: [1, 2], channelKey: 'BT|355|P', transform: 'asinhP' })
+		);
+		expect('error' in res).toBe(false);
+		expect(res.z[0][0]).toBeCloseTo(Math.asinh(10 / 1e-6), 10);
+		expect(res.z[0][1]).toBeCloseTo(Math.asinh(20 / 1e-6), 10);
+		expect(res.z[3][0]).toBeCloseTo(Math.asinh(40 / 1e-6), 10);
+	});
+
+	it('builds the asinh(P·r²/ε) transform matrix', () => {
+		licelFiles.set(sampleData());
+		zenithAngle.set(0);
+		const res = /** @type {any} */ (
+			buildUnfoldData({ fileIds: [1, 2], channelKey: 'BT|355|P', transform: 'asinhPr2' })
+		);
+		expect('error' in res).toBe(false);
+		const r0 = 0.5 * 7.5;
+		const r3 = 3.5 * 7.5;
+		expect(res.z[0][0]).toBeCloseTo(Math.asinh((10 * r0 * r0) / 1e-6), 10);
+		expect(res.z[3][0]).toBeCloseTo(Math.asinh((40 * r3 * r3) / 1e-6), 10);
 	});
 
 	it('requires a molecular profile for the SR transform', () => {

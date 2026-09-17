@@ -129,7 +129,7 @@
 			y,
 			z,
 			type: 'heatmap',
-			colorscale: 'Viridis',
+			colorscale: 'Jet',
 			...(zMin != null && zMax != null && { zmin: zMin, zmax: zMax }),
 			connectgaps: false,
 			colorbar: { title: { text: transformLabel }, thickness: 14 }
