@@ -6,7 +6,8 @@
 		mergeChannels,
 		averageSelectedFiles,
 		setZenithAngle,
-		applyMolecularAnchoring
+		applyMolecularAnchoring,
+		applySmoothing
 	} from '$lib/state/processing';
 	import { openFiles, savePackToZip } from '$lib/state/zip-io';
 	import { downloadBytes } from '$lib/download';
@@ -19,6 +20,7 @@
 	import RemoveBackgroundDialog from './RemoveBackgroundDialog.svelte';
 	import MedianFilterDialog from './MedianFilterDialog.svelte';
 	import CropByHeightDialog from './CropByHeightDialog.svelte';
+	import SmoothDialog from './SmoothDialog.svelte';
 
 	let fileItems = $state(/** @type {Array<any>} */ ([]));
 	let fileInput = $state(/** @type {HTMLInputElement | null} */ (null));
@@ -29,6 +31,7 @@
 	let removeBgOpen = $state(false);
 	let medianOpen = $state(false);
 	let cropOpen = $state(false);
+	let smoothOpen = $state(false);
 
 	$effect(() => {
 		const unsub = files.subscribe((val) => {
@@ -124,6 +127,18 @@
 		applyMolecularAnchoring(cfg);
 	}
 
+	function handleSmooth() {
+		smoothOpen = true;
+	}
+
+	/**
+	 * @param {{ algorithm: string, params: Record<string, number | string> }} cfg
+	 */
+	function handleSmoothApply(cfg) {
+		smoothOpen = false;
+		applySmoothing(cfg);
+	}
+
 	/**
 	 * @param {{ fileIds: number[], channelKey: string, transform: string }} cfg
 	 */
@@ -210,6 +225,12 @@
 		>
 			Молекулярная привязка
 		</button>
+		<button
+			onclick={handleSmooth}
+			class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
+		>
+			Сгладить данные
+		</button>
 	</div>
 	<div class="my-1 border-t border-gray-200"></div>
 	<button
@@ -264,4 +285,8 @@
 
 {#if cropOpen}
 	<CropByHeightDialog onClose={() => (cropOpen = false)} />
+{/if}
+
+{#if smoothOpen}
+	<SmoothDialog onClose={() => (smoothOpen = false)} onApply={(cfg) => handleSmoothApply(cfg)} />
 {/if}

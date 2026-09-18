@@ -81,6 +81,14 @@ export const cropByHeightConfig = writable(
 	})
 );
 
+/** Smoothing dialog settings: selected algorithm and its parameters. */
+export const smoothingConfig = writable(
+	/** @type {{ algorithm: string, params: Record<string, string> }} */ ({
+		algorithm: '',
+		params: {}
+	})
+);
+
 /**
  * Snapshot of channel visibility (channel name -> enabled) remembered from a
  * graph window; applied to graph windows opened afterwards.

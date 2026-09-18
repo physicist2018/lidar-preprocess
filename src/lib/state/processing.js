@@ -7,11 +7,13 @@ import {
 	backgroundRemoval,
 	medianFilter,
 	cropByHeightConfig,
+	smoothingConfig,
 	MEDIAN_WINDOW_MAX,
 	publishLicelData,
 	showError,
 	nextFileId
 } from './store';
+import { applySmoothingFn } from '$lib/smoothing';
 import {
 	forEachProfile,
 	isProfileUsable,
@@ -319,6 +321,29 @@ export async function medianFiltering(windowSize) {
 	publishLicelData(new Map(data), selected);
 
 	medianFilter.set({ windowSize: '' });
+}
+
+// ---------------------------------------------------------------------------
+// Smoothing
+// ---------------------------------------------------------------------------
+
+/**
+ * Apply a smoothing algorithm to every channel of every selected file,
+ * then persist the updated dataset.
+ * @param {{ algorithm: string, params: Record<string, number | string> }} params
+ */
+export function applySmoothing({ algorithm, params }) {
+	const selected = getSelectedFileIds();
+	if (!selected) return;
+
+	const data = get(licelFiles);
+	forEachProfile(data, selected, (p) => {
+		p.data = applySmoothingFn(algorithm, p.data, params);
+	});
+	publishLicelData(new Map(data), selected);
+	refreshFileSizes(selected);
+
+	smoothingConfig.set({ algorithm: '', params: {} });
 }
 
 // ---------------------------------------------------------------------------
