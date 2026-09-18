@@ -3,6 +3,7 @@
 	import FileActions from '$lib/components/FileActions.svelte';
 	import NonModalWindow from '$lib/components/NonModalWindow.svelte';
 	import ErrorDialog from '$lib/components/ErrorDialog.svelte';
+	import HelpDialog from '$lib/components/HelpDialog.svelte';
 	import SessionPicker from '$lib/components/SessionPicker.svelte';
 	import { openWindows, leftPanelPercent, sessionEpoch } from '$lib/state/store';
 	import { addWindow } from '$lib/state/windows';
@@ -19,6 +20,7 @@
 	let leftPercent = $state(20);
 	let windows = $state(/** @type {Array<any>} */ ([]));
 	let pickerOpen = $state(true);
+	let helpOpen = $state(false);
 
 	onMount(async () => {
 		const boot = await bootSessions();
@@ -77,6 +79,11 @@
 
 	/** @param {KeyboardEvent} e */
 	function handleKeydown(e) {
+		if (e.key === 'F1') {
+			e.preventDefault();
+			helpOpen = true;
+			return;
+		}
 		if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S' || e.code === 'KeyS')) {
 			e.preventDefault();
 			if (pickerOpen) return;
@@ -101,6 +108,12 @@
 				class="rounded bg-blue-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-blue-700"
 			>
 				Сохранить (⌘S)
+			</button>
+			<button
+				onclick={() => (helpOpen = true)}
+				class="rounded bg-gray-100 px-3 py-1.5 text-xs text-gray-700 transition-colors hover:bg-gray-200"
+			>
+				Справка (F1)
 			</button>
 		</div>
 	</header>
@@ -179,6 +192,10 @@
 
 	{#if pickerOpen}
 		<SessionPicker onClose={() => (pickerOpen = false)} />
+	{/if}
+
+	{#if helpOpen}
+		<HelpDialog onClose={() => (helpOpen = false)} />
 	{/if}
 
 	<ErrorDialog />
