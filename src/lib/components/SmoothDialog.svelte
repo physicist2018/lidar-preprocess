@@ -1,5 +1,5 @@
 <script>
-	import { files, MODAL_Z_INDEX } from '$lib/state/store';
+	import { files, MODAL_Z_INDEX, showError } from '$lib/state/store';
 	import { applySmoothing } from '$lib/state/processing';
 	import { SMOOTHING_ALGORITHMS, getAlgorithm } from '$lib/smoothing';
 	import { get } from 'svelte/store';
@@ -51,6 +51,7 @@
 			resolvedParams[p.key] = parseNumber(params[p.key], p);
 		}
 		onApply?.({ algorithm: selectedAlgorithm, params: resolvedParams });
+		showError('Функция не реализована');
 	}
 </script>
 
