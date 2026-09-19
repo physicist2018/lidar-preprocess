@@ -24,22 +24,26 @@ export function isProfileUsable(p) {
 /**
  * Iterate over the profiles carrying data of the given files, in file order,
  * invoking `fn(profile, licelFile, fileId)` for each. Inactive profiles are
- * skipped unless `includeInactive` is set. Stops early (and returns false) when
- * `fn` returns false, so validations can bail out of the whole batch.
+ * skipped unless `includeInactive` is set. When `channelFilter` is provided,
+ * only profiles whose `profileKey` is included in the filter are visited.
+ * Stops early (and returns false) when `fn` returns false, so validations can
+ * bail out of the whole batch.
  * @param {Map<number, any>} data
  * @param {number[]} fileIds
  * @param {(profile: any, licelFile: any, fileId: number) => boolean | void} fn
- * @param {{ includeInactive?: boolean }} [options]
+ * @param {{ includeInactive?: boolean, channelFilter?: string[] }} [options]
  * @returns {boolean} false when iteration was stopped early
  */
 export function forEachProfile(data, fileIds, fn, options = {}) {
 	const includeInactive = options.includeInactive ?? false;
+	const channelFilter = options.channelFilter ?? null;
 	for (const id of fileIds) {
 		const lf = data.get(id);
 		if (!lf) continue;
 		for (const p of lf.profiles ?? []) {
 			if (!hasData(p)) continue;
 			if (!includeInactive && p.active === false) continue;
+			if (channelFilter && !channelFilter.includes(profileKey(p))) continue;
 			if (fn(p, lf, id) === false) return false;
 		}
 	}
