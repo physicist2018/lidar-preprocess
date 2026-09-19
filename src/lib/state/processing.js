@@ -277,16 +277,16 @@ export async function removeBackground(params = {}) {
 /**
  * Apply a smoothing algorithm to every channel of every selected file,
  * then persist the updated dataset.
- * @param {{ algorithm: string, params: Record<string, number | string> }} params
+ * @param {{ algorithm: string, params: Record<string, number | string>, channelKeys?: string[] }} params
  */
-export function applySmoothing({ algorithm, params }) {
+export function applySmoothing({ algorithm, params, channelKeys }) {
 	const selected = getSelectedFileIds();
 	if (!selected) return;
 
 	const data = get(licelFiles);
 	forEachProfile(data, selected, (p) => {
 		p.data = applySmoothingFn(algorithm, p.data, params);
-	});
+	}, { channelFilter: channelKeys ?? null });
 	publishLicelData(new Map(data), selected);
 	refreshFileSizes(selected);
 
