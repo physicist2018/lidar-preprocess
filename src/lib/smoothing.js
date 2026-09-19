@@ -88,6 +88,22 @@ export const SMOOTHING_ALGORITHMS = [
 				hint: 'Насколько сигнал тянет к исходному: 0–1'
 			}
 		]
+	},
+	{
+		id: 'moving_median',
+		label: 'Скользящая медиана',
+		params: [
+			{
+				key: 'windowSize',
+				label: 'Размер окна',
+				type: 'number',
+				min: 3,
+				max: 101,
+				step: 2,
+				default: 5,
+				hint: 'Нечётное целое число от 3 до 101'
+			}
+		]
 	}
 ];
 
@@ -101,14 +117,80 @@ export function getAlgorithm(id) {
 }
 
 /**
- * Stub: returns a shallow copy of the input data.
- * Replace with real algorithms later.
+ * Сглаживание скользящим средним.
+ * На краях массива используется частичное окно.
+ * @param {Float64Array} data
+ * @param {number} windowSize — нечётное, >= 3
+ * @returns {Float64Array}
+ */
+function movingAverage(data, windowSize) {
+	const n = data.length;
+	if (n === 0) return new Float64Array(0);
+
+	const hw = Math.floor(windowSize / 2);
+	const result = new Float64Array(n);
+
+	for (let i = 0; i < n; i++) {
+		const start = Math.max(0, i - hw);
+		const end = Math.min(n - 1, i + hw);
+
+		let sum = 0;
+		for (let j = start; j <= end; j++) {
+			sum += data[j];
+		}
+		result[i] = sum / (end - start + 1);
+	}
+
+	return result;
+}
+
+/**
+ * Скользящая медиана.
+ * На краях массива используется частичное окно.
+ * @param {Float64Array} data
+ * @param {number} windowSize — нечётное, >= 3
+ * @returns {Float64Array}
+ */
+function movingMedian(data, windowSize) {
+	const n = data.length;
+	if (n === 0) return new Float64Array(0);
+
+	const hw = Math.floor(windowSize / 2);
+	const result = new Float64Array(n);
+	const buffer = new Float64Array(windowSize);
+
+	for (let i = 0; i < n; i++) {
+		const start = Math.max(0, i - hw);
+		const end = Math.min(n - 1, i + hw);
+
+		let len = 0;
+		for (let j = start; j <= end; j++) {
+			buffer[len++] = data[j];
+		}
+
+		buffer.sort((a, b) => a - b);
+
+		const mid = Math.floor(len / 2);
+		result[i] = len % 2 === 1 ? buffer[mid] : (buffer[mid - 1] + buffer[mid]) / 2;
+	}
+
+	return result;
+}
+
+/**
+ * Применяет алгоритм сглаживания к входным данным.
  * @param {string} algorithmId
  * @param {Float64Array} data
  * @param {Record<string, number | string>} params
  * @returns {Float64Array}
  */
 export function applySmoothingFn(algorithmId, data, params) {
-	// TODO: implement real smoothing algorithms
-	return new Float64Array(data);
+	switch (algorithmId) {
+		case 'moving_average':
+			return movingAverage(data, params.windowSize);
+		case 'moving_median':
+			return movingMedian(data, params.windowSize);
+		default:
+			return new Float64Array(data);
+	}
 }

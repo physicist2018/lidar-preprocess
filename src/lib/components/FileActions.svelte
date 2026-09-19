@@ -18,7 +18,6 @@
 	import ZenithAngleDialog from './ZenithAngleDialog.svelte';
 	import MolecularAnchoringDialog from './MolecularAnchoringDialog.svelte';
 	import RemoveBackgroundDialog from './RemoveBackgroundDialog.svelte';
-	import MedianFilterDialog from './MedianFilterDialog.svelte';
 	import CropByHeightDialog from './CropByHeightDialog.svelte';
 	import SmoothDialog from './SmoothDialog.svelte';
 
@@ -178,12 +177,6 @@
 	<div class="my-1 border-t border-gray-200"></div>
 	<div class="grid grid-cols-2 gap-1.5">
 		<button
-			onclick={handleMedianFiltering}
-			class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
-		>
-			Медианная фильтрация
-		</button>
-		<button
 			onclick={handleRemoveBackground}
 			class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
 		>
@@ -277,10 +270,6 @@
 
 {#if removeBgOpen}
 	<RemoveBackgroundDialog onClose={() => (removeBgOpen = false)} />
-{/if}
-
-{#if medianOpen}
-	<MedianFilterDialog onClose={() => (medianOpen = false)} />
 {/if}
 
 {#if cropOpen}

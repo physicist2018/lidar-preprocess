@@ -51,7 +51,7 @@
 			resolvedParams[p.key] = parseNumber(params[p.key], p);
 		}
 		onApply?.({ algorithm: selectedAlgorithm, params: resolvedParams });
-		showError('Функция не реализована');
+		//showError('Функция не реализована');
 	}
 </script>
 

@@ -39,9 +39,6 @@ export const MODAL_Z_INDEX = 100000;
  */
 export const MAX_WINDOW_Z = MODAL_Z_INDEX - 1;
 
-/** Largest allowed median filter window (odd). */
-export const MEDIAN_WINDOW_MAX = 101;
-
 /** Message shown in the error dialog ('' hides it). */
 export const errorMessage = writable('');
 
@@ -64,13 +61,6 @@ export const backgroundRemoval = writable(
 		method: 'average', // 'average' | 'median' | 'reference'
 		height: '',
 		referenceFile: null
-	})
-);
-
-/** Median filter settings for the dialog form. */
-export const medianFilter = writable(
-	/** @type {{ windowSize: string }} */ ({
-		windowSize: ''
 	})
 );
 
