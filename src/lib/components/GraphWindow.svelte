@@ -51,6 +51,12 @@
 				? 'log'
 				: 'linear'
 	);
+	// Profile value transform: 'P' (raw signal) or 'Pr2' (range-corrected P·r²).
+	let profileTransform = $state(
+		initialView?.profileTransform === 'P' || initialView?.profileTransform === 'Pr2'
+			? initialView.profileTransform
+			: 'P'
+	);
 	// Zenith angle whose height extent is currently refit into the x axis range.
 	let chartAlpha = /** @type {number | null} */ (null);
 
@@ -59,6 +65,13 @@
 	}
 	if (licel) {
 		channels = profilesToChannels(licel);
+	}
+
+	/** Apply range correction to a single value: P·r² when transform is 'Pr2'. */
+	function correctY(y, j, binWidth) {
+		if (profileTransform !== 'Pr2') return y;
+		const distance = (j + 0.5) * binWidth;
+		return y * distance * distance;
 	}
 
 	/** @param {LicelFile} lf */
@@ -70,7 +83,10 @@
 			.map((/** @type {ProfileWithMolecular} */ p, i) => {
 				const binWidth = p.binWidth > 0 ? p.binWidth : 1;
 				const data = p.data ? Array.from(p.data) : [];
-				const points = data.map((y, j) => ({ x: j * binWidth * cosAlpha, y }));
+				const points = data.map((y, j) => ({
+					x: j * binWidth * cosAlpha,
+					y: correctY(y, j, binWidth)
+				}));
 				let molecularPoints = null;
 				if (p.molecular && p.molecular.data) {
 					const molecular = p.molecular.data;
@@ -92,7 +108,7 @@
 					for (let j = 0; j < n; j++) {
 						const y = values[j];
 						if (!Number.isFinite(y)) continue;
-						molecularPoints[count++] = { x: j * binWidth * cosAlpha, y };
+						molecularPoints[count++] = { x: j * binWidth * cosAlpha, y: correctY(y, j, binWidth) };
 					}
 					if (count === 0) molecularPoints = null;
 					else if (count < n) molecularPoints = molecularPoints.slice(0, count);
@@ -381,9 +397,19 @@
 		});
 	}
 
+	function handleToggleProfileTransform() {
+		const next = profileTransform === 'P' ? 'Pr2' : 'P';
+		profileTransform = next;
+		if (licel) {
+			channels = profilesToChannels(licel);
+		}
+		pushView();
+		updateChart();
+	}
+
 	/** Write the current y scale / channel states back into the window record. */
 	function pushView() {
-		updateWindowState(id, { view: { yScale, channelStates } });
+		updateWindowState(id, { view: { yScale, channelStates, profileTransform } });
 	}
 </script>
 
@@ -429,6 +455,14 @@
 					: 'bg-gray-100 text-gray-700 hover:bg-gray-200'}"
 			>
 				{yScale === 'log' ? 'Лин. по Y' : 'Лог. по Y'}
+			</button>
+			<button
+				onclick={handleToggleProfileTransform}
+				class="w-full rounded px-2 py-1.5 text-xs font-medium transition-colors {profileTransform === 'Pr2'
+					? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+					: 'bg-gray-100 text-gray-700 hover:bg-gray-200'}"
+			>
+				{profileTransform === 'Pr2' ? 'P·r²' : 'P'}
 			</button>
 		</div>
 	</div>
