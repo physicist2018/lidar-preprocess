@@ -24,7 +24,7 @@ export const SMOOTHING_ALGORITHMS = [
 	},
 	{
 		id: 'exponential',
-		label: 'Экспоненциальное сглаживание',
+		label: 'Экспоненциальное сглаживание (окно)',
 		params: [
 			{
 				key: 'alpha',
@@ -33,8 +33,18 @@ export const SMOOTHING_ALGORITHMS = [
 				min: 0,
 				max: 1,
 				step: 0.01,
-				default: 0.3,
-				hint: 'Число от 0 до 1: ближе к 0 — сильнее сглаживание'
+				default: 0.5,
+				hint: '0 — копия сигнала, 1 — равномерное среднее по окну'
+			},
+			{
+				key: 'windowSize',
+				label: 'Размер окна',
+				type: 'number',
+				min: 1,
+				max: 101,
+				step: 2,
+				default: 5,
+				hint: 'Нечётное целое ≥ 1 (1 — без сглаживания)'
 			}
 		]
 	},
@@ -208,6 +218,47 @@ function movingMedian(data, windowSize) {
 }
 
 /**
+ * Симметричное экспоненциальное сглаживание в скользящем окне.
+ * Ядро: w_k = C · α^{|k|},  k ∈ [−r, r].
+ * При α = 0 — тождественное преобразование, при α = 1 — равномерное среднее по окну.
+ * На краях массива используется частичное окно с пересчётом нормировки.
+ * @param {Float64Array} data
+ * @param {number} alpha — коэффициент, 0 ≤ α ≤ 1
+ * @param {number} windowSize — нечётное целое ≥ 1
+ * @returns {Float64Array}
+ */
+function exponentialSmoothing(data, alpha, windowSize) {
+	const n = data.length;
+	if (n === 0) return new Float64Array(0);
+
+	const a = Math.min(1, Math.max(0, alpha));
+	const w = Math.max(1, Math.min(n, Math.floor(windowSize)));
+	if (a <= 0 || w <= 1) {
+		return new Float64Array(data);
+	}
+
+	const hw = Math.floor((w - 1) / 2);
+	const result = new Float64Array(n);
+
+	for (let i = 0; i < n; i++) {
+		const start = Math.max(0, i - hw);
+		const end = Math.min(n - 1, i + hw);
+
+		let sum = 0;
+		let wsum = 0;
+		for (let j = start; j <= end; j++) {
+			const wk = a < 1 ? Math.pow(a, Math.abs(j - i)) : 1;
+			sum += wk * data[j];
+			wsum += wk;
+		}
+
+		result[i] = sum / wsum;
+	}
+
+	return result;
+}
+
+/**
  * Применяет алгоритм сглаживания к входным данным.
  * @param {string} algorithmId
  * @param {Float64Array} data
@@ -220,6 +271,11 @@ export function applySmoothingFn(algorithmId, data, params) {
 			return movingAverage(data, params.windowSize);
 		case 'moving_median':
 			return movingMedian(data, params.windowSize);
+		case 'exponential': {
+			const a = Number(params.alpha ?? 0.5);
+			const w = Number(params.windowSize ?? 5);
+			return exponentialSmoothing(data, a, w);
+		}
 		case 'savitzky_golay':
 			return adaptiveSavitzkyGolay(data, params);
 		default:
@@ -393,7 +449,7 @@ function computeAdaptiveWindows(y, baseWindow, k, minWindow, maxWindow) {
 		// Adaptive window size
 		let w;
 		if (globalVar > 1e-15) {
-			w = bw * (1 + k * Math.sqrt(localVar) / Math.sqrt(globalVar));
+			w = bw * (1 + (k * Math.sqrt(localVar)) / Math.sqrt(globalVar));
 		} else {
 			w = bw; // uniform data → fixed window
 		}

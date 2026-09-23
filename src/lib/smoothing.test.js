@@ -75,7 +75,7 @@ describe('applySmoothingFn — savitzky_golay', () => {
 	it('smooths a quadratic signal (output ≈ input) with small values', () => {
 		const n = 100;
 		const data = new Float64Array(n);
-		for (let i = 0; i < n; i++) data[i] = (i * i) * 1e-8;
+		for (let i = 0; i < n; i++) data[i] = i * i * 1e-8;
 		const result = applySmoothingFn('savitzky_golay', data, params);
 		let maxErr = 0;
 		for (let i = 0; i < n; i++) {
@@ -282,4 +282,171 @@ describe('edge cases', () => {
 		// Should complete in reasonable time (< 30s for worst case)
 		expect(elapsed).toBeLessThan(30000);
 	}, 60000);
+});
+
+// ---------------------------------------------------------------------------
+// Algorithm definitions — exponential
+// ---------------------------------------------------------------------------
+
+describe('SMOOTHING_ALGORITHMS — exponential', () => {
+	it('includes exponential with alpha and windowSize', () => {
+		const alg = SMOOTHING_ALGORITHMS.find((a) => a.id === 'exponential');
+		expect(alg).toBeDefined();
+		expect(alg.params.map((p) => p.key)).toEqual(['alpha', 'windowSize']);
+	});
+
+	it('has correct default values for exponential', () => {
+		const alg = getAlgorithm('exponential');
+		const defaults = {};
+		for (const p of alg.params) defaults[p.key] = p.default;
+		expect(defaults.alpha).toBe(0.5);
+		expect(defaults.windowSize).toBe(5);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// applySmoothingFn — exponential
+// ---------------------------------------------------------------------------
+
+describe('applySmoothingFn — exponential', () => {
+	const params = { alpha: 0.5, windowSize: 5 };
+
+	it('returns Float64Array of same length', () => {
+		const data = new Float64Array([1, 2, 3, 4, 5]);
+		const result = applySmoothingFn('exponential', data, params);
+		expect(result).toBeInstanceOf(Float64Array);
+		expect(result.length).toBe(5);
+	});
+
+	it('returns empty array for empty input', () => {
+		const result = applySmoothingFn('exponential', new Float64Array(0), params);
+		expect(result.length).toBe(0);
+	});
+
+	it('windowSize=1 returns copy of input', () => {
+		const data = new Float64Array([1.5, 2.5, 3.5, -4.5, 0]);
+		const result = applySmoothingFn('exponential', data, { alpha: 0.5, windowSize: 1 });
+		for (let i = 0; i < data.length; i++) {
+			expect(result[i]).toBe(data[i]);
+		}
+	});
+
+	it('alpha=0 returns copy of input', () => {
+		const data = new Float64Array([1.5, 2.5, 3.5, -4.5, 0]);
+		const result = applySmoothingFn('exponential', data, { alpha: 0, windowSize: 5 });
+		for (let i = 0; i < data.length; i++) {
+			expect(result[i]).toBe(data[i]);
+		}
+	});
+
+	it('alpha=1 matches moving average with same window (partial edges)', () => {
+		const movingAverage = (data, ws) => {
+			const n = data.length;
+			const hw = Math.floor(ws / 2);
+			const r = new Float64Array(n);
+			for (let i = 0; i < n; i++) {
+				const s = Math.max(0, i - hw);
+				const e = Math.min(n - 1, i + hw);
+				let sum = 0;
+				for (let j = s; j <= e; j++) sum += data[j];
+				r[i] = sum / (e - s + 1);
+			}
+			return r;
+		};
+		const data = new Float64Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+		const ws = 5;
+		const exp = applySmoothingFn('exponential', data, { alpha: 1, windowSize: ws });
+		const ma = movingAverage(data, ws);
+		for (let i = 0; i < data.length; i++) {
+			expect(exp[i]).toBeCloseTo(ma[i], 10);
+		}
+	});
+
+	it('constant signal is preserved', () => {
+		const n = 50;
+		const data = new Float64Array(n);
+		data.fill(42);
+		const result = applySmoothingFn('exponential', data, params);
+		for (let i = 0; i < n; i++) {
+			expect(result[i]).toBeCloseTo(42, 10);
+		}
+	});
+
+	it('linear signal: symmetric kernel preserves center values exactly', () => {
+		const n = 21;
+		const data = new Float64Array(n);
+		for (let i = 0; i < n; i++) data[i] = i;
+		const result = applySmoothingFn('exponential', data, { alpha: 0.5, windowSize: 5 });
+		// For odd n and odd window fully inside, center stays intact (no phase shift)
+		expect(result[10]).toBeCloseTo(10, 10);
+		// All values finite
+		for (let i = 0; i < n; i++) {
+			expect(Number.isFinite(result[i])).toBe(true);
+		}
+	});
+
+	it('reduces high-frequency content on noisy sinusoid', () => {
+		const n = 200;
+		const data = new Float64Array(n);
+		let seed = 123;
+		const rnd = () => {
+			seed = (seed * 16807) % 2147483647;
+			return (seed - 1) / 2147483646;
+		};
+		for (let i = 0; i < n; i++) {
+			data[i] = Math.sin(2 * Math.PI * 0.05 * i) + (rnd() - 0.5) * 0.3;
+		}
+		const result = applySmoothingFn('exponential', data, { alpha: 0.5, windowSize: 7 });
+		let noisyVar = 0;
+		let resultVar = 0;
+		for (let i = 1; i < n; i++) {
+			noisyVar += Math.abs(data[i] - data[i - 1]);
+			resultVar += Math.abs(result[i] - result[i - 1]);
+		}
+		expect(resultVar).toBeLessThan(noisyVar * 0.95);
+	});
+
+	it('handles boundary points (i=0, i=n-1)', () => {
+		const n = 11;
+		const data = new Float64Array(n);
+		for (let i = 0; i < n; i++) data[i] = i * i;
+		const result = applySmoothingFn('exponential', data, { alpha: 0.5, windowSize: 5 });
+		expect(Number.isFinite(result[0])).toBe(true);
+		expect(Number.isFinite(result[n - 1])).toBe(true);
+	});
+
+	it('string param values are coerced to numbers', () => {
+		const data = new Float64Array([1, 2, 3, 4, 5]);
+		const strParams = { alpha: '0.5', windowSize: '5' };
+		const numResult = applySmoothingFn('exponential', data, { alpha: 0.5, windowSize: 5 });
+		const strResult = applySmoothingFn('exponential', data, strParams);
+		for (let i = 0; i < data.length; i++) {
+			expect(strResult[i]).toBeCloseTo(numResult[i], 12);
+		}
+	});
+
+	it('handles 10000 points within reasonable time', () => {
+		const n = 10000;
+		const data = new Float64Array(n);
+		for (let i = 0; i < n; i++) {
+			data[i] = Math.sin(0.01 * i) + (Math.random() - 0.5) * 0.1;
+		}
+		const start = performance.now();
+		const result = applySmoothingFn('exponential', data, { alpha: 0.5, windowSize: 11 });
+		const elapsed = performance.now() - start;
+		expect(result.length).toBe(n);
+		for (let i = 0; i < n; i++) {
+			expect(Number.isFinite(result[i])).toBe(true);
+		}
+		expect(elapsed).toBeLessThan(2000);
+	}, 10000);
+
+	it('default params work without explicit values', () => {
+		const data = new Float64Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+		const result = applySmoothingFn('exponential', data, {});
+		expect(result.length).toBe(10);
+		for (let i = 0; i < result.length; i++) {
+			expect(Number.isFinite(result[i])).toBe(true);
+		}
+	});
 });
