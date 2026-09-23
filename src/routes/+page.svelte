@@ -3,6 +3,7 @@
 	import FileActions from '$lib/components/FileActions.svelte';
 	import NonModalWindow from '$lib/components/NonModalWindow.svelte';
 	import ErrorDialog from '$lib/components/ErrorDialog.svelte';
+	import SmoothProgressDialog from '$lib/components/SmoothProgressDialog.svelte';
 	import HelpDialog from '$lib/components/HelpDialog.svelte';
 	import SessionPicker from '$lib/components/SessionPicker.svelte';
 	import { openWindows, leftPanelPercent, sessionEpoch } from '$lib/state/store';
@@ -199,4 +200,5 @@
 	{/if}
 
 	<ErrorDialog />
+	<SmoothProgressDialog />
 </div>

@@ -7,6 +7,7 @@ import {
 	backgroundRemoval,
 	cropByHeightConfig,
 	smoothingConfig,
+	smoothingProgress,
 	publishLicelData,
 	showError,
 	nextFileId
@@ -15,6 +16,7 @@ import { applySmoothingFn, regularizationSmooth } from '$lib/smoothing';
 import {
 	forEachProfile,
 	isProfileUsable,
+	hasData,
 	profileKey,
 	profileLabel,
 	sameChannelAxis,
@@ -276,7 +278,9 @@ export async function removeBackground(params = {}) {
 
 /**
  * Apply a smoothing algorithm to every channel of every selected file,
- * then persist the updated dataset.
+ * then persist the updated dataset. Runs asynchronously, yielding to the
+ * event loop between files so the SmoothProgressDialog can repaint while
+ * reporting one unit of progress per fully processed file.
  * @param {{
  *   algorithm: string,
  *   params: Record<string, number | string>,
@@ -284,34 +288,67 @@ export async function removeBackground(params = {}) {
  *   options?: { useMolecularProfile?: boolean }
  * }} cfg
  */
-export function applySmoothing({ algorithm, params, channelKeys, options }) {
+export async function applySmoothing({ algorithm, params, channelKeys, options }) {
 	const selected = getSelectedFileIds();
 	if (!selected) return;
 
 	const useMolecular = algorithm === 'regularization' && options?.useMolecularProfile === true;
 
 	const data = get(licelFiles);
+	const filter = channelKeys ?? null;
+
+	// Group the selected files into batches of profiles that actually pass the
+	// channel filter. `total` counts only files with at least one such profile,
+	// so empty/untouched files never inflate the progress denominator.
+	/** @type {Array<{ id: number, profiles: any[] }>} */
+	const files = [];
+	for (const id of selected) {
+		const lf = data.get(id);
+		if (!lf) continue;
+		/** @type {any[]} */
+		const profiles = [];
+		for (const p of lf.profiles ?? []) {
+			if (!hasData(p)) continue;
+			if (p.active === false) continue;
+			if (filter && !filter.includes(profileKey(p))) continue;
+			profiles.push(p);
+		}
+		if (profiles.length > 0) files.push({ id, profiles });
+	}
+
+	const total = files.length;
+
+	smoothingProgress.set({ active: true, done: 0, total, label: 'Подготовка…' });
 
 	let failed = false;
+	let done = 0;
 
-	forEachProfile(
-		data,
-		selected,
-		(p) => {
+	for (const { profiles } of files) {
+		for (const p of profiles) {
 			if (algorithm === 'regularization') {
 				const result = applyRegularizationToProfile(p, params, useMolecular);
 				if (result.error) {
 					failed = true;
 					showError(result.error);
-					return false; // останавливает обход профилей
+					break;
 				}
 				p.data = result.data;
 			} else {
 				p.data = applySmoothingFn(algorithm, p.data, params);
 			}
-		},
-		{ channelFilter: channelKeys ?? null }
-	);
+		}
+		if (failed) break;
+		done++;
+		smoothingProgress.set({
+			active: true,
+			done,
+			total,
+			label: `Обработка файла ${done} из ${total}…`
+		});
+		await yieldToEventLoop();
+	}
+
+	smoothingProgress.set({ active: false, done: 0, total: 0, label: '' });
 
 	if (failed) return; // не публикуем частично обработанный набор
 
@@ -319,6 +356,19 @@ export function applySmoothing({ algorithm, params, channelKeys, options }) {
 	refreshFileSizes(selected);
 
 	smoothingConfig.set({ algorithm: '', params: {} });
+}
+
+/**
+ * Resolve after the browser has a chance to repaint (macrotask), so progress
+ * updates written to the store are actually rendered between batch steps.
+ * No-op-guarded for non-browser environments (tests).
+ * @returns {Promise<void>}
+ */
+function yieldToEventLoop() {
+	if (typeof setTimeout === 'function') {
+		return new Promise((resolve) => setTimeout(resolve, 0));
+	}
+	return Promise.resolve();
 }
 
 /**

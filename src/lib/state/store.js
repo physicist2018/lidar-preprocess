@@ -80,6 +80,22 @@ export const smoothingConfig = writable(
 );
 
 /**
+ * Progress of the running smoothing batch, consumed by the global
+ * SmoothProgressDialog overlay. `done` counts fully processed files; `total`
+ * is the number of files that carry at least one channel passing the
+ * channel filter (so empty files do not inflate the denominator).
+ * `active: false` hides the dialog.
+ */
+export const smoothingProgress = writable(
+	/** @type {{ active: boolean, done: number, total: number, label: string }} */ ({
+		active: false,
+		done: 0,
+		total: 0,
+		label: ''
+	})
+);
+
+/**
  * Snapshot of channel visibility (channel name -> enabled) remembered from a
  * graph window; applied to graph windows opened afterwards.
  */

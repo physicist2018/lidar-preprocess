@@ -133,9 +133,9 @@
 	/**
 	 * @param {{ algorithm: string, params: Record<string, number | string> }} cfg
 	 */
-	function handleSmoothApply(cfg) {
+	async function handleSmoothApply(cfg) {
 		smoothOpen = false;
-		applySmoothing(cfg);
+		await applySmoothing(cfg);
 	}
 
 	/**
