@@ -1,19 +1,23 @@
 <script>
-	import { files, licelFiles, MODAL_Z_INDEX } from '$lib/state/store';
+	import { files, licelFiles, zenithAngle, MODAL_Z_INDEX } from '$lib/state/store';
 	import { applySmoothing } from '$lib/state/processing';
 	import { SMOOTHING_ALGORITHMS, getAlgorithm } from '$lib/smoothing';
 	import { collectDistinctChannels } from '$lib/channels';
 	import { get } from 'svelte/store';
 	import { onMount } from 'svelte';
 
-	/** @type {{ onClose?: () => void, onApply?: (cfg: { algorithm: string, params: Record<string, number | string>, channelKeys: string[] }) => void }} */
+	/** @type {{ onClose?: () => void, onApply?: (cfg: { algorithm: string, params: Record<string, number | string>, channelKeys: string[], options?: { useMolecularProfile?: boolean } }) => void }} */
 	let { onClose, onApply } = $props();
 
 	let totalFiles = $state(/** @type {number} */ (0));
 	let selectedAlgorithm = $state('');
 	let params = $state(/** @type {Record<string, string>} */ ({}));
-	let allChannels = $state(/** @type {Array<{ key: string, label: string, fileCount: number }>} */ ([]));
+	let allChannels = $state(
+		/** @type {Array<{ key: string, label: string, fileCount: number, molecularCount: number }>} */ ([])
+	);
 	let channelStates = $state(/** @type {Record<string, boolean>} */ ({}));
+	/** Только для regularization: подтяжка к молекулярному профилю. */
+	let useMolecularProfile = $state(true);
 
 	function rebuildChannels() {
 		const current = get(files);
@@ -27,6 +31,7 @@
 		const groups = collectDistinctChannels(get(licelFiles), fileIds, () => 'all');
 		const list = groups.get('all') ?? [];
 		// Preserve existing selections for channels that still exist
+		/** @type {Record<string, boolean>} */
 		const next = {};
 		for (const ch of list) {
 			next[ch.key] = channelStates[ch.key] ?? true;
@@ -76,12 +81,48 @@
 			.filter(([, v]) => v)
 			.map(([k]) => k)
 	);
+
+	const isRegularization = $derived(selectedAlgorithm === 'regularization');
+
+	/**
+	 * Количество выбранных каналов, у которых молекулярный профиль есть ВО ВСЕХ
+	 * файлах (molecularCount === fileCount). Только такие каналы безопасно
+	 * сглаживать с привязкой — иначе часть файлов канала уйдёт в ошибку обработки.
+	 */
+	const selectedWithMolecular = $derived(
+		isRegularization && useMolecularProfile
+			? allChannels.filter(
+					(c) => channelStates[c.key] && c.molecularCount === c.fileCount
+				).length
+			: 0
+	);
+	const selectedCount = $derived(
+		allChannels.filter((c) => channelStates[c.key]).length
+	);
+	const molecularRequired = $derived(isRegularization && useMolecularProfile);
+	const molecularOk = $derived(!molecularRequired || selectedWithMolecular === selectedCount);
+	const zenithWarn = $derived(isRegularization && useMolecularProfile && Math.abs(get(zenithAngle)) > 1);
+
+	const molecularStatusKind = $derived.by(() => {
+		if (!isRegularization) return 'none';
+		if (!useMolecularProfile) return 'off';
+		if (selectedCount === 0) return 'none';
+		if (selectedWithMolecular === 0) return 'missing';
+		if (selectedWithMolecular < selectedCount) return 'partial';
+		return 'ready';
+	});
+
 	const canApply = $derived(
-		totalFiles > 0 && selectedAlgorithm !== '' && allParamsValid && selectedChannelKeys.length > 0
+		totalFiles > 0 &&
+			selectedAlgorithm !== '' &&
+			allParamsValid &&
+			selectedChannelKeys.length > 0 &&
+			molecularOk
 	);
 
 	function handleToggleAll() {
 		const allEnabled = Object.values(channelStates).every((v) => v);
+		/** @type {Record<string, boolean>} */
 		const next = {};
 		for (const ch of allChannels) {
 			next[ch.key] = !allEnabled;
@@ -96,11 +137,14 @@
 		for (const p of currentParams) {
 			resolvedParams[p.key] = parseNumber(params[p.key], p);
 		}
-		onApply?.({
+		/** @type {{ algorithm: string, params: Record<string, number | string>, channelKeys: string[], options?: { useMolecularProfile?: boolean } }} */
+		const cfg = {
 			algorithm: selectedAlgorithm,
 			params: resolvedParams,
-			channelKeys: selectedChannelKeys
-		});
+			channelKeys: selectedChannelKeys,
+			options: isRegularization ? { useMolecularProfile } : undefined
+		};
+		onApply?.(cfg);
 	}
 </script>
 
@@ -185,6 +229,50 @@
 				</div>
 
 				<!-- Algorithm-specific parameters -->
+				{#if isRegularization}
+					<div class="space-y-1 rounded border border-gray-200 p-2">
+						<label class="flex cursor-pointer items-start gap-2">
+							<input
+								type="checkbox"
+								bind:checked={useMolecularProfile}
+								class="mt-0.5 accent-blue-600"
+							/>
+							<span class="text-xs">
+								<span class="font-medium text-gray-700">Привязка к молекулярному профилю (Smol)</span>
+								<br />
+								<span class="text-gray-500">
+									Использовать профиль, рассчитанный действием «Молекулярная привязка».
+								</span>
+							</span>
+						</label>
+						{#if molecularStatusKind === 'missing'}
+							<p class="pl-6 text-xs text-red-600">
+								У выбранных каналов нет рассчитанного молекулярного профиля. Запустите
+								«Молекулярная привязка» или снимите флажок.
+							</p>
+						{:else if molecularStatusKind === 'partial'}
+							<p class="pl-6 text-xs text-amber-600">
+								Молекулярный профиль рассчитан не для всех файлов: {selectedWithMolecular} из
+								{selectedCount} выбранных каналов полностью покрыты.
+							</p>
+						{:else if molecularStatusKind === 'ready'}
+							<p class="pl-6 text-xs text-green-600">
+								Молекулярный профиль доступен для всех выбранных каналов.
+							</p>
+						{:else if molecularStatusKind === 'off'}
+							<p class="pl-6 text-xs text-gray-500">Привязка к Smol отключена.</p>
+						{/if}
+						{#if zenithWarn}
+							<p
+								class="pl-6 text-xs text-amber-600"
+								title="Молекулярный профиль рассчитан на сетке высот, а сигмоида H/L применяется на slant-дальности. Точное соответствие только при зенитном угле 0°."
+							>
+								⚠ Зенитный угол не равен 0° — ресемплинг молекулярного профиля не выполняется.
+							</p>
+						{/if}
+					</div>
+				{/if}
+
 				{#if selectedAlgorithm && currentParams.length > 0}
 					<div class="space-y-3">
 						{#each currentParams as param}

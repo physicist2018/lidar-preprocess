@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'bun:test';
-import { SMOOTHING_ALGORITHMS, getAlgorithm, applySmoothingFn } from './smoothing';
+import {
+	SMOOTHING_ALGORITHMS,
+	getAlgorithm,
+	applySmoothingFn,
+	tikhonovMolecularSmooth,
+	inverseArsinh,
+	regularizationSmooth
+} from './smoothing';
 
 // ---------------------------------------------------------------------------
 // Algorithm definitions
@@ -448,5 +455,178 @@ describe('applySmoothingFn — exponential', () => {
 		for (let i = 0; i < result.length; i++) {
 			expect(Number.isFinite(result[i])).toBe(true);
 		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Regularization (Tikhonov with molecular pull)
+// ---------------------------------------------------------------------------
+
+function makeRegSetup(N = 200) {
+	const r = new Float64Array(N);
+	for (let i = 0; i < N; i++) r[i] = (i + 0.5) * 15;
+	const r2 = new Float64Array(N);
+	for (let i = 0; i < N; i++) r2[i] = r[i] * r[i];
+
+	const Pmol = new Float64Array(N);
+	for (let i = 0; i < N; i++) Pmol[i] = 1e-7 + 1e-13 / (i + 1);
+
+	const P = new Float64Array(N);
+	for (let i = 0; i < N; i++) {
+		const peak = 5e-6 * Math.exp(-((i - 100) ** 2) / 100);
+		P[i] = Pmol[i] + peak + 1e-9 * Math.sin(i * 0.7);
+	}
+
+	const S = new Float64Array(N);
+	const Smol = new Float64Array(N);
+	for (let i = 0; i < N; i++) {
+		S[i] = P[i] * r2[i];
+		Smol[i] = Pmol[i] * r2[i];
+	}
+	return { r, S, Smol, P, Pmol };
+}
+
+describe('regularization algorithm', () => {
+	it('declares eps, H, L, lambda, mu parameters', () => {
+		const alg = getAlgorithm('regularization');
+		const keys = alg.params.map((p) => p.key);
+		expect(keys).toEqual(['eps', 'H', 'L', 'lambda', 'mu']);
+	});
+
+	it('applySmoothingFn returns a finite Float64Array of the same length', () => {
+		const { r, S, Smol } = makeRegSetup(150);
+		const out = applySmoothingFn('regularization', S, {
+			eps: 1e-6,
+			H: 4000,
+			L: 300,
+			lambda: 0.5,
+			mu: 1,
+			r,
+			Smol
+		});
+		expect(out).toBeInstanceOf(Float64Array);
+		expect(out.length).toBe(S.length);
+		for (let i = 0; i < out.length; i++) {
+			expect(Number.isFinite(out[i])).toBe(true);
+		}
+	});
+
+	it('falls back to Tikhonov smoothing when mu=0 (no pull toward Smol)', () => {
+		const { r, S, Smol } = makeRegSetup(200);
+		const withPull = tikhonovMolecularSmooth(S, {
+			eps: 1e-6,
+			H: 4000,
+			L: 300,
+			lambda: 0.5,
+			mu: 0,
+			r,
+			Smol
+		});
+		const noPull = tikhonovMolecularSmooth(S, {
+			eps: 1e-6,
+			H: 4000,
+			L: 300,
+			lambda: 0.5,
+			mu: 0,
+			r,
+			Smol: undefined
+		});
+		// Один и тот же функционал без привязки ⇒ почти идентичные ответы.
+		let maxDiff = 0;
+		for (let i = 0; i < withPull.length; i++) {
+			maxDiff = Math.max(maxDiff, Math.abs(withPull[i] - noPull[i]));
+		}
+		expect(maxDiff).toBeLessThan(1e-9);
+	});
+
+	it('strong pull (mu=1, H close to data) makes far-end result track Smol', () => {
+		const { r, S, Smol } = makeRegSetup(200);
+		// Smol = Pmol·r² — для r ≈ 3000 м Smol[i] ≈ 1e-7 · 9e6 = 9e-1
+		const H = -1; // q≡1 везде ⇒ полная привязка
+		const f = tikhonovMolecularSmooth(S, {
+			eps: 1e-6,
+			H,
+			L: 300,
+			lambda: 1e-3,
+			mu: 1,
+			r,
+			Smol
+		});
+		const out = inverseArsinh(f, 1e-6);
+		// На далёкой границе (i=199) результат ≅ Smol[199]
+		const ratio = out[199] / Smol[199];
+		expect(ratio).toBeGreaterThan(0.95);
+		expect(ratio).toBeLessThan(1.05);
+	});
+
+	it('inverseArsinh is the inverse of arcsinh for positive values', () => {
+		const x = new Float64Array([0.1, 1, 5, 20, 100]);
+		const eps = 1e-3;
+		const y = new Float64Array(x.length);
+		for (let i = 0; i < x.length; i++) y[i] = Math.asinh(x[i] / eps);
+		const back = inverseArsinh(y, eps);
+		for (let i = 0; i < x.length; i++) {
+			expect(Math.abs(back[i] - x[i])).toBeLessThan(1e-9 * Math.max(1, Math.abs(x[i])));
+		}
+	});
+
+	it('short input returns copy without throwing', () => {
+		const data = new Float64Array([1, 2]);
+		const out = applySmoothingFn('regularization', data, { eps: 1e-3 });
+		expect(out.length).toBe(2);
+	});
+
+	it('does not mutate input array (Smol/r reused)', () => {
+		const { r, S, Smol } = makeRegSetup(120);
+		const before = new Float64Array(S);
+		applySmoothingFn('regularization', S, {
+			eps: 1e-6,
+			H: 4000,
+			L: 300,
+			lambda: 0.5,
+			mu: 1,
+			r,
+			Smol
+		});
+		for (let i = 0; i < S.length; i++) expect(S[i]).toBe(before[i]);
+	});
+
+	it('regularizationSmooth equals applySmoothingFn regularization branch', () => {
+		const { r, S, Smol } = makeRegSetup(130);
+		const params = { eps: 1e-6, H: 4000, L: 300, lambda: 0.5, mu: 1, r, Smol };
+		const viaFn = applySmoothingFn('regularization', S, params);
+		const viaHelper = regularizationSmooth(S, params);
+		expect(viaHelper.length).toBe(viaFn.length);
+		for (let i = 0; i < viaFn.length; i++) {
+			expect(viaHelper[i]).toBe(viaFn[i]);
+		}
+	});
+
+	it('throws on non-finite input', () => {
+		const { r, S, Smol } = makeRegSetup(100);
+		const badS = new Float64Array(S);
+		badS[50] = NaN;
+		expect(() =>
+			tikhonovMolecularSmooth(badS, {
+				eps: 1e-6,
+				H: 4000,
+				L: 300,
+				lambda: 0.5,
+				mu: 1,
+				r,
+				Smol
+			})
+		).toThrow();
+		expect(() =>
+			tikhonovMolecularSmooth(new Float64Array([1, 2, 3]), {
+				eps: 1e-6,
+				H: 4000,
+				L: 300,
+				lambda: 0.5,
+				mu: 1,
+				r: new Float64Array([1, 2, 3]),
+				Smol: new Float64Array([1, Infinity, 2])
+			})
+		).toThrow();
 	});
 });

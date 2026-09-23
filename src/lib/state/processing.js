@@ -11,7 +11,7 @@ import {
 	showError,
 	nextFileId
 } from './store';
-import { applySmoothingFn } from '$lib/smoothing';
+import { applySmoothingFn, regularizationSmooth } from '$lib/smoothing';
 import {
 	forEachProfile,
 	isProfileUsable,
@@ -277,20 +277,109 @@ export async function removeBackground(params = {}) {
 /**
  * Apply a smoothing algorithm to every channel of every selected file,
  * then persist the updated dataset.
- * @param {{ algorithm: string, params: Record<string, number | string>, channelKeys?: string[] }} params
+ * @param {{
+ *   algorithm: string,
+ *   params: Record<string, number | string>,
+ *   channelKeys?: string[],
+ *   options?: { useMolecularProfile?: boolean }
+ * }} cfg
  */
-export function applySmoothing({ algorithm, params, channelKeys }) {
+export function applySmoothing({ algorithm, params, channelKeys, options }) {
 	const selected = getSelectedFileIds();
 	if (!selected) return;
 
+	const useMolecular = algorithm === 'regularization' && options?.useMolecularProfile === true;
+
 	const data = get(licelFiles);
-	forEachProfile(data, selected, (p) => {
-		p.data = applySmoothingFn(algorithm, p.data, params);
-	}, { channelFilter: channelKeys ?? null });
+
+	let failed = false;
+
+	forEachProfile(
+		data,
+		selected,
+		(p) => {
+			if (algorithm === 'regularization') {
+				const result = applyRegularizationToProfile(p, params, useMolecular);
+				if (result.error) {
+					failed = true;
+					showError(result.error);
+					return false; // останавливает обход профилей
+				}
+				p.data = result.data;
+			} else {
+				p.data = applySmoothingFn(algorithm, p.data, params);
+			}
+		},
+		{ channelFilter: channelKeys ?? null }
+	);
+
+	if (failed) return; // не публикуем частично обработанный набор
+
 	publishLicelData(new Map(data), selected);
 	refreshFileSizes(selected);
 
 	smoothingConfig.set({ algorithm: '', params: {} });
+}
+
+/**
+ * Применяет регуляризацию Тихонова с подтяжкой к молекулярному профилю
+ * к одному профилю. Всегда работает в шкале S = r²·P (требование алгоритма):
+ * на входе p.data — сырьё P; на выходе — также сырьё P.
+ *
+ * @param {any} p                профиль (нужны p.data, p.binWidth, p.molecular)
+ * @param {Record<string, number | string>} params
+ * @param {boolean} useMolecular true → привязка к profile.molecular.data
+ * @returns {{ data: Float64Array, error?: undefined } | { data?: undefined, error: string }}
+ */
+function applyRegularizationToProfile(p, params, useMolecular) {
+	const n = p.data.length;
+	if (n < 3) return { data: new Float64Array(p.data) };
+
+	const binWidth = Number(p.binWidth) || 0;
+	if (!(binWidth > 0)) {
+		return { error: 'Не удалось получить шаг по дальности для профиля.' };
+	}
+
+	// Центры бинов — согласовано с unfold-data.js и GraphWindow.svelte
+	// (r = (j + 0.5) · binWidth). Использование краёв бинов (j · binWidth)
+	// привело бы к принудительному обнулению первого отсчёта (r[0] = 0).
+	/** @type {Float64Array} */
+	const r = new Float64Array(n);
+	for (let j = 0; j < n; j++) r[j] = (j + 0.5) * binWidth;
+
+	const P = p.data;
+	const S = new Float64Array(n);
+	for (let j = 0; j < n; j++) S[j] = P[j] * r[j] * r[j];
+
+	/** @type {Record<string, number | string | Float64Array>} */
+	const rParams = { ...params, r };
+
+	if (useMolecular) {
+		const mol = p.molecular;
+		if (!mol || !mol.data || mol.data.length === 0) {
+			return { error: 'Молекулярный профиль не рассчитан. Запустите «Молекулярная привязка».' };
+		}
+		if (mol.data.length !== n) {
+			return {
+				error: `Длина молекулярного профиля (${mol.data.length}) не совпадает с длиной канала (${n}).`
+			};
+		}
+		/** @type {Float64Array} */
+		const Smol = new Float64Array(n);
+		for (let j = 0; j < n; j++) {
+			Smol[j] = mol.data[j] * r[j] * r[j];
+		}
+		rParams.Smol = Smol;
+	}
+
+	const Ssmooth = regularizationSmooth(S, /** @type {any} */ (rParams));
+
+	const out = new Float64Array(n);
+	for (let j = 0; j < n; j++) {
+		const rj2 = r[j] * r[j];
+		out[j] = rj2 > 0 ? Ssmooth[j] / rj2 : 0;
+	}
+	return { data: out };
 }
 
 // ---------------------------------------------------------------------------

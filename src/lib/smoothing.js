@@ -109,23 +109,49 @@ export const SMOOTHING_ALGORITHMS = [
 		label: 'Регуляризация с подтяжкой',
 		params: [
 			{
+				key: 'eps',
+				label: 'ε (масштаб arcsinh)',
+				type: 'number',
+				min: 0,
+				step: 0.0001,
+				default: 0.001,
+				hint: 'Масштаб стабилизации дисперсии (меньше — сильнее сжатие малых сигналов)'
+			},
+			{
+				key: 'H',
+				label: 'H (центр привязки, м)',
+				type: 'number',
+				min: 0,
+				step: 100,
+				default: 4000,
+				hint: 'Дальность, где привязка к молекулярному профилю начинает доминировать'
+			},
+			{
+				key: 'L',
+				label: 'L (ширина перехода, м)',
+				type: 'number',
+				min: 1,
+				step: 50,
+				default: 300,
+				hint: 'Ширина переходной зоны сигмоиды: больше — мягче переход'
+			},
+			{
 				key: 'lambda',
 				label: 'λ (гладкость)',
 				type: 'number',
 				min: 0,
 				step: 0.001,
 				default: 1,
-				hint: 'Коэффициент гладкости: больше — глаже'
+				hint: 'Коэффициент регуляризации 2-й производной: больше — глаже'
 			},
 			{
-				key: 'pullStrength',
-				label: 'Сила подтяжки (β)',
+				key: 'mu',
+				label: 'μ (сила привязки)',
 				type: 'number',
 				min: 0,
-				max: 1,
 				step: 0.01,
-				default: 0.1,
-				hint: 'Насколько сигнал тянет к исходному: 0–1'
+				default: 1,
+				hint: 'Вес привязки к молекулярному профилю в зоне q≈1'
 			}
 		]
 	},
@@ -260,27 +286,54 @@ function exponentialSmoothing(data, alpha, windowSize) {
 
 /**
  * Применяет алгоритм сглаживания к входным данным.
+ *
+ * Для алгоритма `regularization` дополнительно требуется массив дальностей `r`
+ * и опорный молекулярный профиль — передавайте их через `params.r` и `params.Smol`.
+ *
  * @param {string} algorithmId
  * @param {Float64Array} data
- * @param {Record<string, number | string>} params
+ * @param {Record<string, number | string | Float64Array>} params
  * @returns {Float64Array}
  */
 export function applySmoothingFn(algorithmId, data, params) {
+	/** @type {any} */
+	const p = params;
 	switch (algorithmId) {
 		case 'moving_average':
-			return movingAverage(data, params.windowSize);
+			return movingAverage(data, p.windowSize);
 		case 'moving_median':
-			return movingMedian(data, params.windowSize);
+			return movingMedian(data, p.windowSize);
 		case 'exponential': {
-			const a = Number(params.alpha ?? 0.5);
-			const w = Number(params.windowSize ?? 5);
+			const a = Number(p.alpha ?? 0.5);
+			const w = Number(p.windowSize ?? 5);
 			return exponentialSmoothing(data, a, w);
 		}
 		case 'savitzky_golay':
-			return adaptiveSavitzkyGolay(data, params);
+			return adaptiveSavitzkyGolay(data, p);
+		case 'regularization':
+			return regularizationSmooth(data, p);
 		default:
 			return new Float64Array(data);
 	}
+}
+
+/**
+ * Полный конвейер регуляризации Тихонова с обратным arcsinh-преобразованием:
+ *   f = tikhonovMolecularSmooth(data, params) в шкале arcsinh,
+ *   результат = inverseArsinh(f, eps) — та же шкала, что и data (S = r²·P).
+ *
+ * Единая точка вызова для {@link applySmoothingFn} (ветка 'regularization')
+ * и `applyRegularizationToProfile` в processing.js, чтобы обработка ε и
+ * обратного преобразования не расходилась между конвейерами.
+ *
+ * @param {Float64Array} data
+ * @param {Record<string, number | string | Float64Array | ArrayLike<number>>} params
+ * @returns {Float64Array}
+ */
+export function regularizationSmooth(data, params) {
+	const f = tikhonovMolecularSmooth(data, /** @type {any} */ (params));
+	const eps = Math.max(1e-30, Number(/** @type {any} */ (params).eps ?? 1e-3));
+	return inverseArsinh(f, eps);
 }
 
 // ---------------------------------------------------------------------------
@@ -566,4 +619,295 @@ function adaptiveSavitzkyGolay(data, params) {
 	}
 
 	return result;
+}
+
+// ---------------------------------------------------------------------------
+// Tikhonov regularisation with smooth pull to molecular reference profile
+// ---------------------------------------------------------------------------
+
+/**
+ * Применяет алгоритм Тихонова 2-го порядка с подтяжкой к молекулярному
+ * (референсному) профилю через сигмоидально-взвешенный функционал:
+ *
+ *   Φ(f) = Σ (1 − qᵢ) wᵢ (fᵢ − yᵢ)²
+ *        + λ · Σ (fᵢ₋₁ − 2fᵢ + fᵢ₊₁)²
+ *        + μ · Σ qᵢ (fᵢ − yᵢᵐᵒˡ)²
+ *
+ * где
+ *   yᵢ      = arcsinh(Sᵢ / ε)
+ *   yᵢᵐᵒˡ   = arcsinh(Smolᵢ / ε)
+ *   wᵢ      = Sᵢ                               (whitening-вес Пуассона)
+ *   qᵢ      = 1 / (1 + exp(−(rᵢ − H) / L))     (мягкая привязка)
+ *
+ * Шаг 1. Стабилизация дисперсии: arcsinh с масштабом ε.
+ * Шаг 2. Веса wᵢ = Sᵢ.
+ * Шаг 3. Сигмоидный профиль привязки qᵢ на сетке дальностей r.
+ * Шаг 4. Минимизация квадратичного SPD-функционала Φ(f) методом сопряжённых
+ *         градиентов (CG, матрица собирается на лету через matvec).
+ *
+ * Граничные условия — естественные Неймана (отражение индексов), что
+ * эквивалентно сплайн-сглаживанию Reinsch и не вносит краевых выбросов.
+ *
+ * @param {Float64Array} S — входной сигнал (S = r²·P), длина N.
+ * @param {Record<string, number | Float64Array | ArrayLike<number>>} params
+ *   - `eps`      — масштаб arcsinh (по умолчанию 1e-3).
+ *   - `H`        — центр перехода (м), по умолчанию 4000.
+ *   - `L`        — ширина перехода (м), по умолчанию 300.
+ *   - `lambda`   — вес регуляризации 2-й производной, по умолчанию 1.
+ *   - `mu`       — вес привязки к молекулярному профилю, по умолчанию 1.
+ *   - `Smol`     — молекулярный профиль, длина N. Если не задан — привязки нет.
+ *   - `r`        — дальности (м), длина N. Если не заданы — привязки нет.
+ *   - `tol`      — относительная невязка CG, по умолчанию 1e-8.
+ *   - `maxIter`  — макс. итераций CG, по умолчанию 2000.
+ *
+ * @returns {Float64Array} сглаженный профиль f в шкале arcsinh-стабилизированных
+ *          значений. Для обратного преобразования используйте {@link inverseArsinh}.
+ */
+export function tikhonovMolecularSmooth(S, params) {
+	const N = S ? S.length : 0;
+	if (N < 3) {
+		const src = S ? S : 0;
+		return /** @type {Float64Array} */ (new Float64Array(/** @type {any} */ (src)));
+	}
+
+	/** @type {any} */
+	const pr = params;
+
+	// --- Параметры ----------------------------------------------------------
+	const eps = Math.max(1e-30, Number(pr.eps ?? 1e-3));
+	const H = Number(pr.H ?? 4000);
+	const L = Math.max(1e-30, Number(pr.L ?? 300));
+	const lambda = Math.max(0, Number(pr.lambda ?? 1));
+	const mu = Math.max(0, Number(pr.mu ?? 1));
+	const tol = Number(pr.tol ?? 1e-8);
+	if (!Number.isFinite(tol) || tol < 0) {
+		throw new TypeError(`tikhonovMolecularSmooth: tol (${tol}) должно быть конечным числом ≥ 0`);
+	}
+	const maxIter = Math.max(1, (pr.maxIter | 0) || 2000);
+
+	/** @type {Float64Array | undefined} */
+	const Smol = pr.Smol instanceof Float64Array
+		? pr.Smol
+		: pr.Smol
+			? Float64Array.from(/** @type {any} */ (pr.Smol))
+			: undefined;
+	/** @type {Float64Array | undefined} */
+	const r = pr.r instanceof Float64Array
+		? pr.r
+		: pr.r
+			? Float64Array.from(/** @type {any} */ (pr.r))
+			: undefined;
+
+	// --- Шаг 1. Стабилизация дисперсии (arcsinh) ----------------------------
+	// Предварительно проверяем конечность входов: одиночный NaN/Infinity
+	// сделал бы y,w,a нечисловыми, обошёл бы sumDiag-guard и заставил CG
+	// гонять все maxIter итераций на отравленных данных.
+	for (let i = 0; i < N; i++) {
+		if (!Number.isFinite(S[i])) {
+			throw new TypeError(`tikhonovMolecularSmooth: S[${i}] non-finite (${S[i]})`);
+		}
+		if (Smol && !Number.isFinite(Smol[i] ?? 0)) {
+			throw new TypeError(`tikhonovMolecularSmooth: Smol[${i}] non-finite (${Smol[i]})`);
+		}
+	}
+
+	const y = new Float64Array(N);
+	const ymol = new Float64Array(N);
+	for (let i = 0; i < N; i++) {
+		y[i] = arcsinhOverEps(S[i], eps);
+		ymol[i] = Smol ? arcsinhOverEps(Smol[i] ?? 0, eps) : 0;
+	}
+
+	// --- Шаг 2. Веса Пуассона-Уайтинга --------------------------------------
+	const w = new Float64Array(N);
+	for (let i = 0; i < N; i++) {
+		w[i] = Math.max(0, S[i]);
+	}
+
+	// --- Шаг 3. Сигмоидальный профиль привязки -----------------------------
+	// q[i] = 1 / (1 + exp(-(r_i - H) / L)).
+	// Если r или Smol не заданы — привязки нет: q ≡ 0.
+	const q = new Float64Array(N);
+	if (mu > 0 && Smol && r) {
+		for (let i = 0; i < N; i++) {
+			q[i] = sigmoid((r[i] - H) / L);
+		}
+	}
+
+	// Диагональные веса SPD-матрицы:
+	//   a_i = (1 − q_i) w_i   (привязка к данным)
+	//   c_i = μ q_i           (привязка к молекулярному профилю)
+	const a = new Float64Array(N);
+	const c = new Float64Array(N);
+	let sumDiag = 0;
+	for (let i = 0; i < N; i++) {
+		a[i] = (1 - q[i]) * w[i];
+		c[i] = mu * q[i];
+		sumDiag += a[i] + c[i];
+	}
+	if (sumDiag === 0 && lambda === 0) {
+		return y;
+	}
+
+	// --- Шаг 4. CG-минимизация Φ(f) ----------------------------------------
+	// Φ квадратичный, SPD. Стартуем с f⁰ = (1 − q)·y + q·ymol.
+	const f = new Float64Array(N);
+	for (let i = 0; i < N; i++) {
+		f[i] = (1 - q[i]) * y[i] + q[i] * ymol[i];
+	}
+
+	// Градиент Φ при текущем f: g_i = ∂Φ/∂f_i.
+	const g = new Float64Array(N);
+	// Scratch-буферы переиспользуются между итерациями/CG-шагами,
+	// чтобы не аллоцировать N-вектор на каждую итерацию (GC-нагрузка).
+	const scratchU = new Float64Array(N);
+	const scratchD = new Float64Array(N);
+	fillGradient(g, f, y, ymol, a, c, lambda, N, scratchU);
+
+	// Правая часть нормальных уравнений:
+	//   b_i = a_i·y_i + c_i·ymol_i
+	// Невязка e = b − A f = −g.
+	const e = new Float64Array(N);
+	for (let i = 0; i < N; i++) e[i] = -g[i];
+	const p = new Float64Array(e);
+	let gamma = dot(e, e);
+	const gamma0 = gamma;
+	if (gamma === 0) return f;
+
+	const Ap = new Float64Array(N);
+	let k = 0;
+	for (; k < maxIter; k++) {
+		applyHessian(p, Ap, a, c, lambda, N, scratchD);
+		const pAp = dot(p, Ap);
+		if (pAp <= 0) break;
+		const alpha = gamma / pAp;
+		for (let i = 0; i < N; i++) {
+			f[i] += alpha * p[i];
+			e[i] -= alpha * Ap[i];
+		}
+		const gammaNext = dot(e, e);
+		if (gammaNext <= tol * tol * gamma0) break;
+		const beta = gammaNext / gamma;
+		for (let i = 0; i < N; i++) {
+			p[i] = e[i] + beta * p[i];
+		}
+		gamma = gammaNext;
+	}
+
+	return f;
+}
+
+/**
+ * Обратное преобразование arcsinh: S = sinh(f) · ε.
+ * Используйте, чтобы вернуть f из {@link tikhonovMolecularSmooth}
+ * в шкалу исходных значений S = r²·P.
+ *
+ * @param {Float64Array} f
+ * @param {number} eps
+ * @returns {Float64Array}
+ */
+export function inverseArsinh(f, eps) {
+	const N = f.length;
+	const out = new Float64Array(N);
+	// sin(700)x ≈ 0.5·e^700 ≈ 7e303 — в пределах double (mac-лимит ~1.8e308).
+	// Клэмп в 50 обрезал легитимные большие значения f (достижимы при огромном S/ε).
+	const MAX_SINH_INPUT = 700;
+	for (let i = 0; i < N; i++) {
+		const s = Math.max(-MAX_SINH_INPUT, Math.min(MAX_SINH_INPUT, f[i]));
+		if (s > 20) out[i] = 0.5 * Math.exp(s) * eps;
+		else if (s < -20) out[i] = -0.5 * Math.exp(-s) * eps;
+		else out[i] = 0.5 * (Math.exp(s) - Math.exp(-s)) * eps;
+	}
+	return out;
+}
+
+/** arcsinh(x / ε) — стабилизация дисперсии Пуассоновского лидара. */
+/** @param {number} v @param {number} eps */
+function arcsinhOverEps(v, eps) {
+	return Math.asinh(v / eps);
+}
+
+/** Логистическая сигмоида, численно устойчивая. */
+/** @param {number} t */
+function sigmoid(t) {
+	if (t >= 0) {
+		const z = Math.exp(-t);
+		return 1 / (1 + z);
+	}
+	const z = Math.exp(t);
+	return z / (1 + z);
+}
+
+/** Скалярное произведение двух векторов равной длины. */
+/** @param {Float64Array} av @param {Float64Array} bv */
+function dot(av, bv) {
+	let s = 0;
+	for (let i = 0; i < av.length; i++) s += av[i] * bv[i];
+	return s;
+}
+
+/**
+ * Заполняет вектор градиента g[i] = ∂Φ/∂f_i в точке f.
+ *
+ *   ∂Φ/∂f_i = 2 a_i (f_i − y_i) + 2 c_i (f_i − ymol_i)
+ *            + 2λ · (D2ᵀ D2 f)_i
+ *
+ * Neumann BC реализованы через отражение индексов на границах.
+ *
+ * @param {Float64Array} g
+ * @param {Float64Array} f
+ * @param {Float64Array} y
+ * @param {Float64Array} ymol
+ * @param {Float64Array} a
+ * @param {Float64Array} c
+ * @param {number}      lambda
+ * @param {number}      N
+ * @param {Float64Array} u — scratch-буфер длины N, переиспользуется между вызовами
+ */
+function fillGradient(g, f, y, ymol, a, c, lambda, N, u) {
+	for (let i = 0; i < N; i++) {
+		g[i] = 2 * a[i] * (f[i] - y[i]) + 2 * c[i] * (f[i] - ymol[i]);
+	}
+	if (lambda <= 0) return;
+
+	for (let i = 0; i < N; i++) {
+		const ip = i + 1 < N ? i + 1 : i;
+		const im = i - 1 >= 0 ? i - 1 : i;
+		u[i] = f[im] - 2 * f[i] + f[ip];
+	}
+	for (let i = 0; i < N; i++) {
+		const ip = i + 1 < N ? i + 1 : i;
+		const im = i - 1 >= 0 ? i - 1 : i;
+		g[i] += 2 * lambda * (u[im] - 2 * u[i] + u[ip]);
+	}
+}
+
+/**
+ * Умножает SPD-оператор Гессиана Φ на p и записывает в q.
+ * Neumann BC — через отражение индексов.
+ *
+ * @param {Float64Array} p
+ * @param {Float64Array} q
+ * @param {Float64Array} a
+ * @param {Float64Array} c
+ * @param {number}      lambda
+ * @param {number}      N
+ * @param {Float64Array} d — scratch-буфер длины N, переиспользуется между итерациями
+ */
+function applyHessian(p, q, a, c, lambda, N, d) {
+	for (let i = 0; i < N; i++) {
+		q[i] = (a[i] + c[i]) * p[i];
+	}
+	if (lambda <= 0) return;
+
+	for (let i = 0; i < N; i++) {
+		const ip = i + 1 < N ? i + 1 : i;
+		const im = i - 1 >= 0 ? i - 1 : i;
+		d[i] = p[im] - 2 * p[i] + p[ip];
+	}
+	for (let i = 0; i < N; i++) {
+		const ip = i + 1 < N ? i + 1 : i;
+		const im = i - 1 >= 0 ? i - 1 : i;
+		q[i] += lambda * (d[im] - 2 * d[i] + d[ip]);
+	}
 }
