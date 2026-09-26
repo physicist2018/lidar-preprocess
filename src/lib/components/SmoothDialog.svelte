@@ -1,8 +1,13 @@
 <script>
-	import { files, licelFiles, zenithAngle, MODAL_Z_INDEX } from '$lib/state/store';
+	import { files, licelFiles, zenithAngle, MODAL_Z_INDEX, showError } from '$lib/state/store';
 	import { applySmoothing } from '$lib/state/processing';
 	import { SMOOTHING_ALGORITHMS, getAlgorithm } from '$lib/smoothing';
 	import { collectDistinctChannels } from '$lib/channels';
+	import {
+		loadSmoothingPrefill,
+		saveSmoothingConfig,
+		clearSmoothingConfig
+	} from '$lib/state/smoothing-persist';
 	import { get } from 'svelte/store';
 	import { onMount } from 'svelte';
 
@@ -46,7 +51,36 @@
 		rebuildChannels();
 		const unsubFiles = files.subscribe(() => rebuildChannels());
 		const unsubData = licelFiles.subscribe(() => rebuildChannels());
+		// Track teardown so the async IDB read cannot write into a destroyed
+		// component instance.
+		let active = true;
+		// Prefill from the last successfully applied smoothing run, if any.
+		// Done after rebuildChannels() so we can match channelKeys against the
+		// current channel list; missing keys are simply ignored.
+		loadSmoothingPrefill().then((prefill) => {
+			if (!active || !prefill) return;
+			selectedAlgorithm = prefill.algorithm;
+			params = { ...params, ...prefill.params };
+			// useMolecularProfile only matters for the regularization algorithm;
+			// the sanitizer reports false for everything else, so an unconditional
+			// assign would flip the default off and surprise the user when they
+			// later switch algorithms.
+			if (prefill.algorithm === 'regularization') {
+				useMolecularProfile = prefill.useMolecularProfile;
+			}
+			/** @type {Record<string, boolean>} */
+			const next = {};
+			for (const ch of allChannels) {
+				if (prefill.channelKeys.length === 0) {
+					next[ch.key] = true;
+				} else {
+					next[ch.key] = prefill.channelKeys.includes(ch.key);
+				}
+			}
+			channelStates = next;
+		});
 		return () => {
+			active = false;
 			unsubFiles();
 			unsubData();
 		};
@@ -91,17 +125,15 @@
 	 */
 	const selectedWithMolecular = $derived(
 		isRegularization && useMolecularProfile
-			? allChannels.filter(
-					(c) => channelStates[c.key] && c.molecularCount === c.fileCount
-				).length
+			? allChannels.filter((c) => channelStates[c.key] && c.molecularCount === c.fileCount).length
 			: 0
 	);
-	const selectedCount = $derived(
-		allChannels.filter((c) => channelStates[c.key]).length
-	);
+	const selectedCount = $derived(allChannels.filter((c) => channelStates[c.key]).length);
 	const molecularRequired = $derived(isRegularization && useMolecularProfile);
 	const molecularOk = $derived(!molecularRequired || selectedWithMolecular === selectedCount);
-	const zenithWarn = $derived(isRegularization && useMolecularProfile && Math.abs(get(zenithAngle)) > 1);
+	const zenithWarn = $derived(
+		isRegularization && useMolecularProfile && Math.abs(get(zenithAngle)) > 1
+	);
 
 	const molecularStatusKind = $derived.by(() => {
 		if (!isRegularization) return 'none';
@@ -144,7 +176,19 @@
 			channelKeys: selectedChannelKeys,
 			options: isRegularization ? { useMolecularProfile } : undefined
 		};
+		// Persist immediately so the form values survive even if applySmoothing
+		// later fails on some files. Fire-and-forget: a rejected IDB write
+		// should not block the user's workflow.
+		saveSmoothingConfig(cfg).catch(() => {});
 		onApply?.(cfg);
+	}
+
+	async function handleForgetSaved() {
+		try {
+			await clearSmoothingConfig();
+		} catch (err) {
+			showError(`Не удалось сбросить сохранённые параметры: ${err}`);
+		}
 	}
 </script>
 
@@ -189,10 +233,7 @@
 						<label class="block text-xs font-semibold tracking-wider text-gray-500 uppercase">
 							Каналы
 						</label>
-						<button
-							onclick={handleToggleAll}
-							class="text-xs text-blue-600 hover:text-blue-800"
-						>
+						<button onclick={handleToggleAll} class="text-xs text-blue-600 hover:text-blue-800">
 							{Object.values(channelStates).every((v) => v) ? 'Снять все' : 'Выбрать все'}
 						</button>
 					</div>
@@ -238,7 +279,9 @@
 								class="mt-0.5 accent-blue-600"
 							/>
 							<span class="text-xs">
-								<span class="font-medium text-gray-700">Привязка к молекулярному профилю (Smol)</span>
+								<span class="font-medium text-gray-700"
+									>Привязка к молекулярному профилю (Smol)</span
+								>
 								<br />
 								<span class="text-gray-500">
 									Использовать профиль, рассчитанный действием «Молекулярная привязка».
@@ -247,8 +290,8 @@
 						</label>
 						{#if molecularStatusKind === 'missing'}
 							<p class="pl-6 text-xs text-red-600">
-								У выбранных каналов нет рассчитанного молекулярного профиля. Запустите
-								«Молекулярная привязка» или снимите флажок.
+								У выбранных каналов нет рассчитанного молекулярного профиля. Запустите «Молекулярная
+								привязка» или снимите флажок.
 							</p>
 						{:else if molecularStatusKind === 'partial'}
 							<p class="pl-6 text-xs text-amber-600">
@@ -309,22 +352,31 @@
 			{/if}
 		</div>
 
-		<div class="flex justify-end gap-2 border-t border-gray-200 px-4 py-3">
+		<div class="flex justify-between gap-2 border-t border-gray-200 px-4 py-3">
 			<button
-				onclick={() => onClose?.()}
-				class="rounded bg-gray-100 px-4 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200"
+				onclick={handleForgetSaved}
+				class="rounded px-3 py-1.5 text-xs text-gray-500 transition-colors hover:text-gray-700"
+				title="Сбросить сохранённые параметры сглаживания"
 			>
-				Отмена
+				Сбросить сохранённое
 			</button>
-			<button
-				onclick={handleApply}
-				disabled={!canApply}
-				class="rounded px-4 py-1.5 text-sm font-medium transition-colors {canApply
-					? 'bg-blue-600 text-white hover:bg-blue-700'
-					: 'cursor-not-allowed bg-gray-200 text-gray-400'}"
-			>
-				Применить
-			</button>
+			<div class="flex gap-2">
+				<button
+					onclick={() => onClose?.()}
+					class="rounded bg-gray-100 px-4 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200"
+				>
+					Отмена
+				</button>
+				<button
+					onclick={handleApply}
+					disabled={!canApply}
+					class="rounded px-4 py-1.5 text-sm font-medium transition-colors {canApply
+						? 'bg-blue-600 text-white hover:bg-blue-700'
+						: 'cursor-not-allowed bg-gray-200 text-gray-400'}"
+				>
+					Применить
+				</button>
+			</div>
 		</div>
 	</div>
 </div>
