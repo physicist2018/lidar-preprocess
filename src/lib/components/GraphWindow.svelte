@@ -69,13 +69,15 @@
 
 	/**
 	 * Apply range correction to a single value: P·r² when transform is 'Pr2'.
+	 * `binWidth` is in meters; r is converted to kilometers before squaring,
+	 * so the result is P · km².
 	 * @param {number} y
 	 * @param {number} j
-	 * @param {number} binWidth
+	 * @param {number} binWidth meters per bin
 	 */
 	function correctY(y, j, binWidth) {
 		if (profileTransform !== 'Pr2') return y;
-		const distance = (j + 0.5) * binWidth;
+		const distance = ((j + 0.5) * binWidth) / 1000;
 		return y * distance * distance;
 	}
 

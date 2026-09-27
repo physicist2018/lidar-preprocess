@@ -101,17 +101,19 @@ function decimateIndices(length, max) {
 
 /**
  * Map a channel value to its display value for the given transform.
+ * `distance` is the bin center in meters; for the Pr2 family of transforms r
+ * is converted to kilometers before squaring, so the result is in P · km².
  * @param {number} v
  * @param {string} transform
  * @param {number} distance meters of the bin center
  */
 function applyUnfoldTransform(v, transform, distance) {
-	if (transform === 'Pr2') return v * distance * distance;
+	const rKm = distance / 1000;
+	if (transform === 'Pr2') return v * rKm * rKm;
 	if (transform === 'symlogP') return symlogValue(v);
-	if (transform === 'symlogPr2') return symlogValue(v * distance * distance);
+	if (transform === 'symlogPr2') return symlogValue(v * rKm * rKm);
 	if (transform === 'asinhP') return Math.asinh(v / UNFOLD_ASINH_EPS);
-	if (transform === 'asinhPr2')
-		return Math.asinh((v * distance * distance) / UNFOLD_ASINH_EPS);
+	if (transform === 'asinhPr2') return Math.asinh((v * rKm * rKm) / UNFOLD_ASINH_EPS);
 	return v;
 }
 
