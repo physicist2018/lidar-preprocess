@@ -135,8 +135,9 @@
 
 				{#if method === 'average' || method === 'median'}
 					<div>
-						<label class="mb-1 block text-xs text-gray-500">Высота начала, м</label>
+						<label for="bg-height" class="mb-1 block text-xs text-gray-500">Высота начала, м</label>
 						<input
+							id="bg-height"
 							type="number"
 							bind:value={height}
 							min="0"
@@ -154,8 +155,11 @@
 
 				{#if method === 'reference'}
 					<div>
-						<label class="mb-1 block text-xs text-gray-500">Референсный файл</label>
+						<label for="bg-reference" class="mb-1 block text-xs text-gray-500"
+							>Референсный файл</label
+						>
 						<input
+							id="bg-reference"
 							type="file"
 							accept="*.*"
 							onchange={handleFileChange}

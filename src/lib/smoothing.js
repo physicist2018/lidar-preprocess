@@ -558,11 +558,11 @@ function adaptiveSavitzkyGolay(data, params) {
 	if (n === 0) return new Float64Array(0);
 
 	// Parse parameters
-	const order = Math.max(1, Math.min(5, Math.floor(params.polynomialOrder ?? 2)));
-	let baseWindow = Math.max(3, Math.min(n, Math.floor(params.baseWindowSize ?? 11)));
-	const k = Math.max(0, params.adaptivity ?? 1);
-	let minWindow = Math.max(1, Math.floor(params.minWindowSize ?? 3));
-	let maxWindow = Math.max(3, Math.min(n, Math.floor(params.maxWindowSize ?? 21)));
+	const order = Math.max(1, Math.min(5, Math.floor(Number(params.polynomialOrder ?? 2))));
+	let baseWindow = Math.max(3, Math.min(n, Math.floor(Number(params.baseWindowSize ?? 11))));
+	const k = Math.max(0, Number(params.adaptivity ?? 1));
+	let minWindow = Math.max(1, Math.floor(Number(params.minWindowSize ?? 3)));
+	let maxWindow = Math.max(3, Math.min(n, Math.floor(Number(params.maxWindowSize ?? 21))));
 
 	// Ensure odd values
 	if (baseWindow % 2 === 0) baseWindow -= 1;
@@ -683,20 +683,22 @@ export function tikhonovMolecularSmooth(S, params) {
 	if (!Number.isFinite(tol) || tol < 0) {
 		throw new TypeError(`tikhonovMolecularSmooth: tol (${tol}) должно быть конечным числом ≥ 0`);
 	}
-	const maxIter = Math.max(1, (pr.maxIter | 0) || 2000);
+	const maxIter = Math.max(1, pr.maxIter | 0 || 2000);
 
 	/** @type {Float64Array | undefined} */
-	const Smol = pr.Smol instanceof Float64Array
-		? pr.Smol
-		: pr.Smol
-			? Float64Array.from(/** @type {any} */ (pr.Smol))
-			: undefined;
+	const Smol =
+		pr.Smol instanceof Float64Array
+			? pr.Smol
+			: pr.Smol
+				? Float64Array.from(/** @type {any} */ (pr.Smol))
+				: undefined;
 	/** @type {Float64Array | undefined} */
-	const r = pr.r instanceof Float64Array
-		? pr.r
-		: pr.r
-			? Float64Array.from(/** @type {any} */ (pr.r))
-			: undefined;
+	const r =
+		pr.r instanceof Float64Array
+			? pr.r
+			: pr.r
+				? Float64Array.from(/** @type {any} */ (pr.r))
+				: undefined;
 
 	// --- Шаг 1. Стабилизация дисперсии (arcsinh) ----------------------------
 	// Предварительно проверяем конечность входов: одиночный NaN/Infinity

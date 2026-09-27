@@ -156,6 +156,7 @@
 <div
 	bind:this={windowRef}
 	tabindex="-1"
+	role="presentation"
 	class="absolute flex flex-col overflow-hidden rounded-lg border border-gray-200 bg-white shadow-xl"
 	style="left: {maximizedState ? 0 : posX}px; top: {maximizedState
 		? 0

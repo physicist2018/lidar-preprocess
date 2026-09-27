@@ -8,13 +8,27 @@ import {
 	regularizationSmooth
 } from './smoothing';
 
+/**
+ * Wrapper around Bun's `it()` that exposes the third-arg timeout overload.
+ * The bun:test module has no @types/bun in this repo, so svelte-check
+ * complains when tests pass a timeout directly. Centralising the cast keeps
+ * the call sites readable.
+ * @type {{
+ *   (name: string, fn: () => void | Promise<void>): void,
+ *   (name: string, fn: () => void | Promise<void>, timeout: number): void
+ * }}
+ */
+const itWithTimeout = /** @type {any} */ (it);
+
 // ---------------------------------------------------------------------------
 // Algorithm definitions
 // ---------------------------------------------------------------------------
 
 describe('SMOOTHING_ALGORITHMS', () => {
 	it('includes savitzky_golay with 5 parameters', () => {
-		const alg = SMOOTHING_ALGORITHMS.find((a) => a.id === 'savitzky_golay');
+		const alg = /** @type {import('./smoothing').SmoothingAlgorithm} */ (
+			SMOOTHING_ALGORITHMS.find((a) => a.id === 'savitzky_golay')
+		);
 		expect(alg).toBeDefined();
 		expect(alg.params).toHaveLength(5);
 		expect(alg.params.map((p) => p.key)).toEqual([
@@ -28,7 +42,7 @@ describe('SMOOTHING_ALGORITHMS', () => {
 
 	it('has correct default values for savitzky_golay', () => {
 		const alg = getAlgorithm('savitzky_golay');
-		const defaults = {};
+		const defaults = /** @type {Record<string, unknown>} */ ({});
 		for (const p of alg.params) defaults[p.key] = p.default;
 		expect(defaults.polynomialOrder).toBe(2);
 		expect(defaults.baseWindowSize).toBe(11);
@@ -209,7 +223,7 @@ describe('applySmoothingFn — savitzky_golay', () => {
 
 	it('default params work without explicit values', () => {
 		const data = new Float64Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-		const minimalParams = {};
+		const minimalParams = /** @type {Record<string, number | string | Float64Array>} */ ({});
 		const result = applySmoothingFn('savitzky_golay', data, minimalParams);
 		expect(result.length).toBe(10);
 		for (let i = 0; i < result.length; i++) {
@@ -273,22 +287,26 @@ describe('edge cases', () => {
 		}
 	});
 
-	it('handles large n (10000 points)', () => {
-		const n = 10000;
-		const data = new Float64Array(n);
-		for (let i = 0; i < n; i++) {
-			data[i] = Math.sin(0.01 * i) + (Math.random() - 0.5) * 0.1;
-		}
-		const start = performance.now();
-		const result = applySmoothingFn('savitzky_golay', data, baseParams);
-		const elapsed = performance.now() - start;
-		expect(result.length).toBe(n);
-		for (let i = 0; i < result.length; i++) {
-			expect(Number.isFinite(result[i])).toBe(true);
-		}
-		// Should complete in reasonable time (< 30s for worst case)
-		expect(elapsed).toBeLessThan(30000);
-	}, 60000);
+	itWithTimeout(
+		'handles large n (10000 points)',
+		() => {
+			const n = 10000;
+			const data = new Float64Array(n);
+			for (let i = 0; i < n; i++) {
+				data[i] = Math.sin(0.01 * i) + (Math.random() - 0.5) * 0.1;
+			}
+			const start = performance.now();
+			const result = applySmoothingFn('savitzky_golay', data, baseParams);
+			const elapsed = performance.now() - start;
+			expect(result.length).toBe(n);
+			for (let i = 0; i < result.length; i++) {
+				expect(Number.isFinite(result[i])).toBe(true);
+			}
+			// Should complete in reasonable time (< 30s for worst case)
+			expect(elapsed).toBeLessThan(30000);
+		},
+		60000
+	);
 });
 
 // ---------------------------------------------------------------------------
@@ -297,14 +315,16 @@ describe('edge cases', () => {
 
 describe('SMOOTHING_ALGORITHMS — exponential', () => {
 	it('includes exponential with alpha and windowSize', () => {
-		const alg = SMOOTHING_ALGORITHMS.find((a) => a.id === 'exponential');
+		const alg = /** @type {import('./smoothing').SmoothingAlgorithm} */ (
+			SMOOTHING_ALGORITHMS.find((a) => a.id === 'exponential')
+		);
 		expect(alg).toBeDefined();
 		expect(alg.params.map((p) => p.key)).toEqual(['alpha', 'windowSize']);
 	});
 
 	it('has correct default values for exponential', () => {
 		const alg = getAlgorithm('exponential');
-		const defaults = {};
+		const defaults = /** @type {Record<string, unknown>} */ ({});
 		for (const p of alg.params) defaults[p.key] = p.default;
 		expect(defaults.alpha).toBe(0.5);
 		expect(defaults.windowSize).toBe(5);
@@ -347,6 +367,7 @@ describe('applySmoothingFn — exponential', () => {
 	});
 
 	it('alpha=1 matches moving average with same window (partial edges)', () => {
+		/** @param {Float64Array} data @param {number} ws */
 		const movingAverage = (data, ws) => {
 			const n = data.length;
 			const hw = Math.floor(ws / 2);
@@ -432,21 +453,25 @@ describe('applySmoothingFn — exponential', () => {
 		}
 	});
 
-	it('handles 10000 points within reasonable time', () => {
-		const n = 10000;
-		const data = new Float64Array(n);
-		for (let i = 0; i < n; i++) {
-			data[i] = Math.sin(0.01 * i) + (Math.random() - 0.5) * 0.1;
-		}
-		const start = performance.now();
-		const result = applySmoothingFn('exponential', data, { alpha: 0.5, windowSize: 11 });
-		const elapsed = performance.now() - start;
-		expect(result.length).toBe(n);
-		for (let i = 0; i < n; i++) {
-			expect(Number.isFinite(result[i])).toBe(true);
-		}
-		expect(elapsed).toBeLessThan(2000);
-	}, 10000);
+	itWithTimeout(
+		'handles 10000 points within reasonable time',
+		() => {
+			const n = 10000;
+			const data = new Float64Array(n);
+			for (let i = 0; i < n; i++) {
+				data[i] = Math.sin(0.01 * i) + (Math.random() - 0.5) * 0.1;
+			}
+			const start = performance.now();
+			const result = applySmoothingFn('exponential', data, { alpha: 0.5, windowSize: 11 });
+			const elapsed = performance.now() - start;
+			expect(result.length).toBe(n);
+			for (let i = 0; i < n; i++) {
+				expect(Number.isFinite(result[i])).toBe(true);
+			}
+			expect(elapsed).toBeLessThan(2000);
+		},
+		10000
+	);
 
 	it('default params work without explicit values', () => {
 		const data = new Float64Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
@@ -522,15 +547,18 @@ describe('regularization algorithm', () => {
 			r,
 			Smol
 		});
-		const noPull = tikhonovMolecularSmooth(S, {
-			eps: 1e-6,
-			H: 4000,
-			L: 300,
-			lambda: 0.5,
-			mu: 0,
-			r,
-			Smol: undefined
-		});
+		const noPull = tikhonovMolecularSmooth(
+			S,
+			/** @type {any} */ ({
+				eps: 1e-6,
+				H: 4000,
+				L: 300,
+				lambda: 0.5,
+				mu: 0,
+				r,
+				Smol: undefined
+			})
+		);
 		// Один и тот же функционал без привязки ⇒ почти идентичные ответы.
 		let maxDiff = 0;
 		for (let i = 0; i < withPull.length; i++) {

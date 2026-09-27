@@ -189,6 +189,7 @@
 </script>
 
 <div
+	role="presentation"
 	class="fixed inset-0 flex items-center justify-center bg-gray-900/40 backdrop-blur-sm"
 	style="z-index: {MODAL_Z_INDEX}"
 	onmousedown={(e) => {
@@ -240,6 +241,8 @@
 				<div class="flex flex-col gap-2">
 					{#each items as item (item.id)}
 						<div
+							role="button"
+							tabindex="0"
 							class="group flex cursor-pointer items-center gap-2 rounded border border-gray-200 bg-white px-3 py-2 transition-colors hover:bg-gray-50"
 							ondblclick={() => handleOpen(item.id)}
 						>
