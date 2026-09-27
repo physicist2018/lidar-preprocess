@@ -228,11 +228,11 @@
 				<p class="text-sm text-gray-500">В открытых файлах нет каналов с данными.</p>
 			{:else}
 				<!-- Channel selection -->
-				<div>
+				<fieldset>
 					<div class="mb-1 flex items-center justify-between">
-						<label class="block text-xs font-semibold tracking-wider text-gray-500 uppercase">
+						<legend class="block text-xs font-semibold tracking-wider text-gray-500 uppercase">
 							Каналы
-						</label>
+						</legend>
 						<button onclick={handleToggleAll} class="text-xs text-blue-600 hover:text-blue-800">
 							{Object.values(channelStates).every((v) => v) ? 'Снять все' : 'Выбрать все'}
 						</button>
@@ -253,12 +253,15 @@
 							</label>
 						{/each}
 					</div>
-				</div>
+				</fieldset>
 
 				<!-- Algorithm selection -->
 				<div>
-					<label class="mb-1 block text-xs text-gray-500">Алгоритм сглаживания</label>
+					<label for="smooth-algorithm" class="mb-1 block text-xs text-gray-500"
+						>Алгоритм сглаживания</label
+					>
 					<select
+						id="smooth-algorithm"
 						bind:value={selectedAlgorithm}
 						class="w-full rounded border border-gray-300 px-2 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
 					>

@@ -31,6 +31,8 @@
 				/>
 				<span
 					class="flex-1 cursor-pointer truncate text-sm group-hover:text-blue-600"
+					role="button"
+					tabindex="0"
 					ondblclick={(e) => {
 						e.stopPropagation();
 						onDoubleClick?.(file);

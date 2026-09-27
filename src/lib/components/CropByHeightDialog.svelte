@@ -76,8 +76,11 @@
 				<p class="text-sm text-gray-500">Нет загруженных файлов. Сначала откройте данные.</p>
 			{:else}
 				<div>
-					<label class="mb-1 block text-xs text-gray-500">Максимальная высота, м</label>
+					<label for="crop-max-height" class="mb-1 block text-xs text-gray-500"
+						>Максимальная высота, м</label
+					>
 					<input
+						id="crop-max-height"
 						type="number"
 						bind:value={maxHeight}
 						min="0"
