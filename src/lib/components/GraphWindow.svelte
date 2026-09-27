@@ -67,7 +67,12 @@
 		channels = profilesToChannels(licel);
 	}
 
-	/** Apply range correction to a single value: P·r² when transform is 'Pr2'. */
+	/**
+	 * Apply range correction to a single value: P·r² when transform is 'Pr2'.
+	 * @param {number} y
+	 * @param {number} j
+	 * @param {number} binWidth
+	 */
 	function correctY(y, j, binWidth) {
 		if (profileTransform !== 'Pr2') return y;
 		const distance = (j + 0.5) * binWidth;
@@ -458,7 +463,8 @@
 			</button>
 			<button
 				onclick={handleToggleProfileTransform}
-				class="w-full rounded px-2 py-1.5 text-xs font-medium transition-colors {profileTransform === 'Pr2'
+				class="w-full rounded px-2 py-1.5 text-xs font-medium transition-colors {profileTransform ===
+				'Pr2'
 					? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
 					: 'bg-gray-100 text-gray-700 hover:bg-gray-200'}"
 			>
