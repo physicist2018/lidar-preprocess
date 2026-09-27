@@ -100,10 +100,10 @@ describe('buildUnfoldData', () => {
 			buildUnfoldData({ fileIds: [1, 2], channelKey: 'BT|355|P', transform: 'asinhPr2' })
 		);
 		expect('error' in res).toBe(false);
-		const r0 = 0.5 * 7.5;
-		const r3 = 3.5 * 7.5;
-		expect(res.z[0][0]).toBeCloseTo(Math.asinh((10 * r0 * r0) / 1e-6), 10);
-		expect(res.z[3][0]).toBeCloseTo(Math.asinh((40 * r3 * r3) / 1e-6), 10);
+		const r0Km = (0.5 * 7.5) / 1000;
+		const r3Km = (3.5 * 7.5) / 1000;
+		expect(res.z[0][0]).toBeCloseTo(Math.asinh((10 * r0Km * r0Km) / 1e-6), 10);
+		expect(res.z[3][0]).toBeCloseTo(Math.asinh((40 * r3Km * r3Km) / 1e-6), 10);
 	});
 
 	it('requires a molecular profile for the SR transform', () => {
