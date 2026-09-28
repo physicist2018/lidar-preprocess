@@ -7,7 +7,8 @@
 		averageSelectedFiles,
 		setZenithAngle,
 		applyMolecularAnchoring,
-		applySmoothing
+		applySmoothing,
+		applyRetrieval
 	} from '$lib/state/processing';
 	import { openFiles, savePackToZip } from '$lib/state/zip-io';
 	import { downloadBytes } from '$lib/download';
@@ -17,6 +18,7 @@
 	import MergeChannelsDialog from './MergeChannelsDialog.svelte';
 	import ZenithAngleDialog from './ZenithAngleDialog.svelte';
 	import MolecularAnchoringDialog from './MolecularAnchoringDialog.svelte';
+	import RetrievalDialog from './RetrievalDialog.svelte';
 	import RemoveBackgroundDialog from './RemoveBackgroundDialog.svelte';
 	import CropByHeightDialog from './CropByHeightDialog.svelte';
 	import SmoothDialog from './SmoothDialog.svelte';
@@ -27,6 +29,7 @@
 	let mergeDialogOpen = $state(false);
 	let zenithDialogOpen = $state(false);
 	let molecularDialogOpen = $state(false);
+	let retrievalDialogOpen = $state(false);
 	let removeBgOpen = $state(false);
 	let medianOpen = $state(false);
 	let cropOpen = $state(false);
@@ -126,6 +129,18 @@
 		applyMolecularAnchoring(cfg);
 	}
 
+	function handleRetrieval() {
+		retrievalDialogOpen = true;
+	}
+
+	/**
+	 * @param {{ algorithm: string, params: Record<string, number>, channelKeys: string[] }} cfg
+	 */
+	function handleRetrievalApply(cfg) {
+		retrievalDialogOpen = false;
+		applyRetrieval(cfg);
+	}
+
 	function handleSmooth() {
 		smoothOpen = true;
 	}
@@ -219,6 +234,12 @@
 			Молекулярная привязка
 		</button>
 		<button
+			onclick={handleRetrieval}
+			class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
+		>
+			Выполнить расчет
+		</button>
+		<button
 			onclick={handleSmooth}
 			class="w-full rounded bg-gray-100 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-gray-200"
 		>
@@ -265,6 +286,13 @@
 	<MolecularAnchoringDialog
 		onClose={() => (molecularDialogOpen = false)}
 		onApply={(cfg) => handleMolecularApply(cfg)}
+	/>
+{/if}
+
+{#if retrievalDialogOpen}
+	<RetrievalDialog
+		onClose={() => (retrievalDialogOpen = false)}
+		onApply={(cfg) => handleRetrievalApply(cfg)}
 	/>
 {/if}
 

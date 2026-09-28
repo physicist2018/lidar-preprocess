@@ -46,6 +46,24 @@ function getSelectedFileIds() {
 }
 
 // ---------------------------------------------------------------------------
+// Retrieval stubs ("расчёт параметров аэрозоля")
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {{ algorithm: string, params: Record<string, number>, channelKeys: string[] }} cfg
+ */
+export function applyRetrieval(cfg) {
+	const labels = /** @type {Record<string, string>} */ ({
+		klett: '«Расчёт по Клету»',
+		ansmann: '«Расчёт по Ансману»',
+		'klett-ansmann': '«Клет+Ансман»',
+		'depolarization-total': '«Деполяризация (суммарная)»',
+		'depolarization-aerosol': '«Деполяризация (аэрозольная)»'
+	});
+	showError(`Алгоритм ${labels[cfg.algorithm] ?? cfg.algorithm} ещё не реализован.`);
+}
+
+// ---------------------------------------------------------------------------
 // File list actions
 // ---------------------------------------------------------------------------
 
