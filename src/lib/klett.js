@@ -138,7 +138,7 @@ export function klettFernald(input) {
 			};
 		}
 		betaTotal[k - 1] = prev;
-		betaAerosol[k - 1] = prev - betaMolecular[k - 1];
+		betaAerosol[k - 1] = Math.max(prev - betaMolecular[k - 1], 0);
 		alphaAerosol[k - 1] = Sa * betaAerosol[k - 1];
 		alphaTotal[k - 1] = alphaMolecular[k - 1] + alphaAerosol[k - 1];
 	}
@@ -157,7 +157,7 @@ export function klettFernald(input) {
 		});
 		if (!Number.isFinite(next)) break;
 		betaTotal[k + 1] = next;
-		betaAerosol[k + 1] = next - betaMolecular[k + 1];
+		betaAerosol[k + 1] = Math.max(next - betaMolecular[k + 1], 0);
 		alphaAerosol[k + 1] = Sa * betaAerosol[k + 1];
 		alphaTotal[k + 1] = alphaMolecular[k + 1] + alphaAerosol[k + 1];
 	}
@@ -184,8 +184,10 @@ export function klettFernald(input) {
  */
 function stepBackward(p) {
 	const { sPrev, sK, betaMPrev, betaMK, alphaMPrev, alphaMK, betaK, Sa, dz } = p;
-	if (!(sK > 0) || !(sPrev > 0) || !(betaK > 0) || !(dz > 0) || !(Sa > 0)) return NaN;
+	if (!(betaK > 0) || !(dz > 0) || !(Sa > 0)) return NaN;
 	if (!(betaMK > 0)) return NaN;
+	if (sPrev <= 0) return 0;
+	if (sK <= 0) return 0;
 	const alphaMid = 0.5 * (alphaMPrev + alphaMK);
 	const betaAK = Math.max(betaK - betaMK, 0);
 	const Y = (sPrev / sK) * Math.exp(-2 * (alphaMid + Sa * betaAK) * dz);
@@ -204,8 +206,10 @@ function stepBackward(p) {
  */
 function stepForward(p) {
 	const { sNext, sK, betaMNext, betaMK, alphaMNext, alphaMK, betaK, Sa, dz } = p;
-	if (!(sK > 0) || !(sNext > 0) || !(betaK > 0) || !(dz > 0) || !(Sa > 0)) return NaN;
+	if (!(betaK > 0) || !(dz > 0) || !(Sa > 0)) return NaN;
 	if (!(betaMK > 0)) return NaN;
+	if (sNext <= 0) return 0;
+	if (sK <= 0) return 0;
 	const alphaMid = 0.5 * (alphaMK + alphaMNext);
 	const betaAK = Math.max(betaK - betaMK, 0);
 	const Y = (sNext / sK) * Math.exp(2 * (alphaMid + Sa * betaAK) * dz);
@@ -247,8 +251,8 @@ function validateKlettInput(input) {
 		) {
 			return `Нечисловое значение на индексе ${i}.`;
 		}
-		if (signal[i] <= 0 || betaMolecular[i] <= 0 || alphaMolecular[i] < 0) {
-			return `Нефизичное значение на индексе ${i}: сигнал и β_m должны быть > 0, α_m ≥ 0.`;
+		if (signal[i] < 0 || betaMolecular[i] <= 0 || alphaMolecular[i] < 0) {
+			return `Нефизичное значение на индексе ${i}: сигнал и β_m должны быть ≥ 0, α_m ≥ 0.`;
 		}
 		if (r[i] < 0) return `О��рицательная высота на индексе ${i}.`;
 	}

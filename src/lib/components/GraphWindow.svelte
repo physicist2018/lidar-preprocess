@@ -13,7 +13,7 @@
 
 	/** @typedef {import('licelfile-js').LicelFile} LicelFile */
 	/** @typedef {import('licelfile-js').LicelProfile} LicelProfile */
-	/** @typedef {import('licelfile-js').LicelProfile & { molecular?: { data: ArrayLike<number>, zenithDeg?: number } }} ProfileWithMolecular */
+	/** @typedef {import('licelfile-js').LicelProfile & { molecular?: { data: ArrayLike<number>, zenithDeg?: number }, retrieval?: { betaAerosol: Float64Array, betaTotal: Float64Array, betaMolecular: Float64Array } }} ProfileWithMolecular */
 
 	/** @type {{ id: number, fileName: string, fileId?: number | null, initialView?: any }} */
 	let { id, fileName, fileId = null, initialView = null } = $props();
@@ -41,7 +41,7 @@
 	/** @type {any} */
 	let licel = null;
 	/** @type {Array<{ name: string, color: string, points: Array<{ x: number, y: number }>, molecularPoints: Array<{ x: number, y: number }> | null }>} */
-	let channels = [];
+	let channels = $state([]);
 	// Y axis scale of the graph window: 'linear' | 'log'. Falls back to the
 	// globally remembered scale ("Кнопка 2"), otherwise linear.
 	let yScale = $state(
@@ -57,6 +57,16 @@
 			? initialView.profileTransform
 			: 'P'
 	);
+	// Display mode: 'P' (raw signal / range-corrected), 'beta' (aerosol backscatter), 'R' (scattering ratio).
+	let displayMode = $state(
+		initialView?.displayMode === 'beta' || initialView?.displayMode === 'R'
+			? initialView.displayMode
+			: 'P'
+	);
+	/** Whether at least one profile has retrieval (betaAerosol) data. */
+	let retrievalAvailable = $derived(
+		licel ? licel.profiles.some(/** @param {any} p */ (p) => p.retrieval?.betaAerosol != null) : false
+	);
 	// Zenith angle whose height extent is currently refit into the x axis range.
 	let chartAlpha = /** @type {number | null} */ (null);
 
@@ -64,6 +74,13 @@
 		licel = get(licelFiles).get(fileId) ?? null;
 	}
 	if (licel) {
+		// Fall back to P mode if the restored session had beta/R but the data lacks retrieval.
+		if (
+			displayMode !== 'P' &&
+			!licel.profiles.some(/** @param {any} p */ (p) => p.retrieval?.betaAerosol != null)
+		) {
+			displayMode = 'P';
+		}
 		channels = profilesToChannels(licel);
 	}
 
@@ -81,55 +98,95 @@
 		return y * distance * distance;
 	}
 
+	/** @param {any} p */
+	function profileLabel(p) {
+		const mode =
+			p.deviceID === 'BC' ? 'фотон' : p.deviceID === 'BT' ? 'аналог' : p.deviceID || 'канал';
+		const pol = p.polarization ? ` (${p.polarization})` : '';
+		return `${p.wavelength} нм${pol} · ${mode}`;
+	}
+
 	/** @param {LicelFile} lf */
 	function profilesToChannels(lf) {
 		const alphaRad = (get(zenithAngle) * Math.PI) / 180;
 		const cosAlpha = Math.cos(alphaRad);
+		const isBeta = displayMode === 'beta';
+		const isRatio = displayMode === 'R';
 		return (lf.profiles ?? [])
 			.filter((p) => p.active !== false)
 			.map((/** @type {ProfileWithMolecular} */ p, i) => {
 				const binWidth = p.binWidth > 0 ? p.binWidth : 1;
-				const data = p.data ? Array.from(p.data) : [];
-				const points = data.map((y, j) => ({
-					x: j * binWidth * cosAlpha,
-					y: correctY(y, j, binWidth)
-				}));
+				/** @type {Array<{ x: number, y: number }>} */
+				let points;
 				let molecularPoints = null;
-				if (p.molecular && p.molecular.data) {
-					const molecular = p.molecular.data;
-					const n = Math.min(molecular.length, data.length);
-					// The stored profile lives on the height grid of the anchoring
-					// zenith (z = j * binWidth * cos(zenithDeg)); when the current
-					// zenith differs, resample it onto the current grid so the
-					// overlay stays aligned with the measured signal.
-					const anchorZenithDeg =
-						typeof p.molecular.zenithDeg === 'number' ? p.molecular.zenithDeg : get(zenithAngle);
-					const anchorDz = binWidth * Math.cos((anchorZenithDeg * Math.PI) / 180);
-					const currentDz = binWidth * cosAlpha;
-					const values =
-						Math.abs(anchorDz - currentDz) <= 1e-6 * Math.max(anchorDz, currentDz)
-							? molecular
-							: resampleMolecular(molecular, anchorDz, currentDz);
-					molecularPoints = new Array(n);
-					let count = 0;
+
+				if (isBeta) {
+					// Aerosol backscatter coefficient (β_aerosol)
+					const betaA = p.retrieval?.betaAerosol;
+					if (!betaA) return null;
+					const n = betaA.length;
+					points = [];
 					for (let j = 0; j < n; j++) {
-						const y = values[j];
-						if (!Number.isFinite(y)) continue;
-						molecularPoints[count++] = { x: j * binWidth * cosAlpha, y: correctY(y, j, binWidth) };
+						const y = betaA[j];
+						if (Number.isFinite(y)) {
+							points.push({ x: j * binWidth * cosAlpha, y });
+						}
 					}
-					if (count === 0) molecularPoints = null;
-					else if (count < n) molecularPoints = molecularPoints.slice(0, count);
+				} else if (isRatio) {
+					// Scattering ratio R = β_total / β_molecular
+					const bt = p.retrieval?.betaTotal;
+					const bm = p.retrieval?.betaMolecular;
+					if (!bt || !bm) return null;
+					const n = Math.min(bt.length, bm.length);
+					points = [];
+					for (let j = 0; j < n; j++) {
+						const denom = bm[j];
+						const num = bt[j];
+						if (denom > 0 && Number.isFinite(num)) {
+							points.push({ x: j * binWidth * cosAlpha, y: num / denom });
+						}
+					}
+				} else {
+					// Raw signal P (with optional range correction)
+					const data = p.data ? Array.from(p.data) : [];
+					points = data.map((y, j) => ({
+						x: j * binWidth * cosAlpha,
+						y: correctY(y, j, binWidth)
+					}));
+					if (p.molecular && p.molecular.data) {
+						const molecular = p.molecular.data;
+						const n = Math.min(molecular.length, data.length);
+						const anchorZenithDeg =
+							typeof p.molecular.zenithDeg === 'number'
+								? p.molecular.zenithDeg
+								: get(zenithAngle);
+						const anchorDz = binWidth * Math.cos((anchorZenithDeg * Math.PI) / 180);
+						const currentDz = binWidth * cosAlpha;
+						const values =
+							Math.abs(anchorDz - currentDz) <= 1e-6 * Math.max(anchorDz, currentDz)
+								? molecular
+								: resampleMolecular(molecular, anchorDz, currentDz);
+						molecularPoints = new Array(n);
+						let count = 0;
+						for (let j = 0; j < n; j++) {
+							const y = values[j];
+							if (!Number.isFinite(y)) continue;
+							molecularPoints[count++] = { x: j * binWidth * cosAlpha, y: correctY(y, j, binWidth) };
+						}
+						if (count === 0) molecularPoints = null;
+						else if (count < n) molecularPoints = molecularPoints.slice(0, count);
+					}
 				}
-				const mode =
-					p.deviceID === 'BC' ? 'фотон' : p.deviceID === 'BT' ? 'аналог' : p.deviceID || 'канал';
-				const pol = p.polarization ? ` (${p.polarization})` : '';
+
 				return {
-					name: `${p.wavelength} нм${pol} · ${mode}`,
+					name: profileLabel(p),
 					color: channelPalette[i % channelPalette.length],
 					points,
-					molecularPoints
+					molecularPoints: isBeta || isRatio ? null : molecularPoints
 				};
-			});
+			})
+			.filter(/** @returns {boolean} */ (ch) => ch != null)
+			.map(/** @param {any} ch */ (ch) => ch);
 	}
 
 	// Initialize channel states before mount: restore the persisted per-window
@@ -173,6 +230,13 @@
 				const next = map.get(fileId);
 				if (!next) return;
 				licel = next;
+				// Fall back to P mode if retrieval data is no longer available.
+				if (
+					displayMode !== 'P' &&
+					!next.profiles.some(/** @param {any} p */ (p) => p.retrieval?.betaAerosol != null)
+				) {
+					displayMode = 'P';
+				}
 				const rebuilt = profilesToChannels(next);
 				const nextStates = { ...channelStates };
 				for (const ch of rebuilt) {
@@ -228,6 +292,14 @@
 		};
 	});
 
+	function yAxisTitle() {
+		return displayMode === 'beta'
+			? 'β, км⁻¹·ср⁻¹'
+			: displayMode === 'R'
+				? 'R'
+				: 'Сигнал';
+	}
+
 	function initChart() {
 		import('plotly.js-dist-min').then((Plotly) => {
 			PlotlyLib = Plotly;
@@ -253,7 +325,7 @@
 					automargin: true
 				},
 				yaxis: {
-					title: { text: 'Сигнал' },
+					title: { text: yAxisTitle() },
 					type: yScale,
 					zeroline: false,
 					automargin: true
@@ -319,20 +391,27 @@
 		if (!PlotlyLib || !plotlyInstance || !chartRef) return;
 		if (channels.length === 0) return;
 		const alpha = get(zenithAngle);
+		const yTitle = yAxisTitle();
 		let layout = plotlyInstance.layout;
 		// Re-fit the height axis only when the zenith angle changed; otherwise
 		// keep the live layout so the user's zoom/pan survives redraws.
-		if (chartAlpha !== alpha) {
-			let maxX = 0;
-			for (const ch of channels) {
-				const last = ch.points[ch.points.length - 1];
-				if (last) maxX = Math.max(maxX, last.x);
-			}
+		if (chartAlpha !== alpha || layout.yaxis.title.text !== yTitle) {
 			layout = {
-				...plotlyInstance.layout,
-				xaxis: { ...plotlyInstance.layout.xaxis, range: [0, maxX || 1] }
+				...layout,
+				yaxis: { ...layout.yaxis, title: { text: yTitle } }
 			};
-			chartAlpha = alpha;
+			if (chartAlpha !== alpha) {
+				let maxX = 0;
+				for (const ch of channels) {
+					const last = ch.points[ch.points.length - 1];
+					if (last) maxX = Math.max(maxX, last.x);
+				}
+				layout = {
+					...layout,
+					xaxis: { ...layout.xaxis, range: [0, maxX || 1] }
+				};
+				chartAlpha = alpha;
+			}
 		}
 		PlotlyLib.react(chartRef, buildTraces(), layout);
 	}
@@ -405,6 +484,7 @@
 	}
 
 	function handleToggleProfileTransform() {
+		if (displayMode === 'beta') return;
 		const next = profileTransform === 'P' ? 'Pr2' : 'P';
 		profileTransform = next;
 		if (licel) {
@@ -414,9 +494,19 @@
 		updateChart();
 	}
 
-	/** Write the current y scale / channel states back into the window record. */
+	/** @param {string} mode */
+	function handleDisplayModeChange(mode) {
+		displayMode = mode;
+		if (licel) {
+			channels = profilesToChannels(licel);
+		}
+		pushView();
+		updateChart();
+	}
+
+	/** Write the current view state back into the window record. */
 	function pushView() {
-		updateWindowState(id, { view: { yScale, channelStates, profileTransform } });
+		updateWindowState(id, { view: { yScale, channelStates, profileTransform, displayMode } });
 	}
 </script>
 
@@ -442,6 +532,19 @@
 				{/each}
 			{/if}
 		</div>
+		<!-- Display mode selector -->
+		<div class="border-t border-gray-200 px-3 py-2">
+			<label class="text-xs font-semibold tracking-wider text-gray-500 uppercase">Тип данных</label>
+			<select
+				value={displayMode}
+				onchange={(/** @type {Event} */ e) => handleDisplayModeChange(/** @type {HTMLSelectElement} */ (e.target).value)}
+				class="mt-1 w-full rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700"
+			>
+				<option value="P">P</option>
+				<option value="beta" disabled={!retrievalAvailable}>β</option>
+				<option value="R" disabled={!retrievalAvailable}>R</option>
+			</select>
+		</div>
 		<div class="space-y-1 border-t border-gray-200 px-2 py-2">
 			<button
 				onclick={handleToggleAllChannels}
@@ -465,12 +568,15 @@
 			</button>
 			<button
 				onclick={handleToggleProfileTransform}
-				class="w-full rounded px-2 py-1.5 text-xs font-medium transition-colors {profileTransform ===
-				'Pr2'
-					? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
-					: 'bg-gray-100 text-gray-700 hover:bg-gray-200'}"
+				disabled={displayMode === 'beta'}
+				class="w-full rounded px-2 py-1.5 text-xs font-medium transition-colors {displayMode ===
+				'beta'
+					? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+					: profileTransform === 'Pr2'
+						? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+						: 'bg-gray-100 text-gray-700 hover:bg-gray-200'}"
 			>
-				{profileTransform === 'Pr2' ? 'P·r²' : 'P'}
+				{displayMode === 'beta' ? 'P/P·r²' : profileTransform === 'Pr2' ? 'P·r²' : 'P'}
 			</button>
 		</div>
 	</div>

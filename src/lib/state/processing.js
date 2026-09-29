@@ -183,14 +183,6 @@ async function applyKlett(cfg) {
 				showError(`Канал ${profileLabel(p)} файла "${fileName}" содержит нечисловые значения.`);
 				return false;
 			}
-			for (let j = 0; j < p.data.length; j++) {
-				if (!(p.data[j] > 0)) {
-					showError(
-						`Канал ${profileLabel(p)} файла "${fileName}" содержит неположительные отсчёты (индекс ${j}). Сигнал должен быть > 0 после удаления фона.`
-					);
-					return false;
-				}
-			}
 			work.push({ profile: p, fileName });
 		},
 		{ includeInactive: false }
@@ -208,7 +200,10 @@ async function applyKlett(cfg) {
 		const { profile: p, fileName } = work[i];
 		const { r, z } = buildHeightGrid(p, cosZenith);
 		const signal = new Float64Array(p.data.length);
-		for (let j = 0; j < p.data.length; j++) signal[j] = p.data[j] * r[j] * r[j];
+		for (let j = 0; j < p.data.length; j++) {
+			const v = p.data[j];
+			signal[j] = v > 0 ? v * r[j] * r[j] : 0;
+		}
 		const { betaMolecular, alphaMolecular } = molecularProfiles({
 			meteo: meteoState.meteo,
 			zGrid: z,
