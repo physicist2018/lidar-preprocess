@@ -48,9 +48,7 @@
 				{label}
 			</p>
 			<p class="mt-1 text-xs text-gray-400">
-				{total > 0
-					? `Обработано ${Math.min(done, total)} из ${total} файлов`
-					: 'Обработка…'}
+				{total > 0 ? `Обработано ${Math.min(done, total)} из ${total} файлов` : 'Обработка…'}
 			</p>
 		</div>
 	</div>
