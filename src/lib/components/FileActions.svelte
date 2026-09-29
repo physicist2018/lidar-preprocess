@@ -19,6 +19,7 @@
 	import ZenithAngleDialog from './ZenithAngleDialog.svelte';
 	import MolecularAnchoringDialog from './MolecularAnchoringDialog.svelte';
 	import RetrievalDialog from './RetrievalDialog.svelte';
+	import RetrievalProgressDialog from './RetrievalProgressDialog.svelte';
 	import RemoveBackgroundDialog from './RemoveBackgroundDialog.svelte';
 	import CropByHeightDialog from './CropByHeightDialog.svelte';
 	import SmoothDialog from './SmoothDialog.svelte';
@@ -295,6 +296,8 @@
 		onApply={(cfg) => handleRetrievalApply(cfg)}
 	/>
 {/if}
+
+<RetrievalProgressDialog />
 
 {#if removeBgOpen}
 	<RemoveBackgroundDialog onClose={() => (removeBgOpen = false)} />

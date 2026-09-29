@@ -37,7 +37,7 @@
 			for (const p of lf.profiles) {
 				if (p.active === false) continue;
 				const mode = p.photon === true ? 'D' : 'A';
-				const pol = p.polarization || '';
+				const pol = (p.polarization || '').toUpperCase();
 				const key = `${p.wavelength}.${pol}.${mode}`;
 				const hasMol = Boolean(p.molecular && p.molecular.data && p.molecular.data.length > 0);
 				const label = `${p.wavelength} нм · ${pol || ''} · ${mode}`;
@@ -57,9 +57,7 @@
 		}
 		if (activeAlg?.allowedWavelengths) {
 			const allowed = activeAlg.allowedWavelengths;
-			let filtered = entries.filter((ch) =>
-				allowed.some((w) => Math.abs(ch.wavelength - w) < 1)
-			);
+			let filtered = entries.filter((ch) => allowed.some((w) => Math.abs(ch.wavelength - w) < 1));
 			entries.length = 0;
 			entries.push(...filtered);
 		}
