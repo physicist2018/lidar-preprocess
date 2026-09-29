@@ -231,6 +231,7 @@ async function applyKlett(cfg) {
 		p.retrieval = {
 			algorithm: 'klett',
 			betaAerosol: result.betaAerosol,
+			betaMolecular,
 			alphaAerosol: result.alphaAerosol,
 			betaTotal: result.betaTotal,
 			alphaTotal: result.alphaTotal,

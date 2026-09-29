@@ -10,7 +10,8 @@ export const UNFOLD_TRANSFORMS = [
 	{ id: 'symlogPr2', label: 'symlog(P·r²)', short: 'symlog(P·r²)' },
 	{ id: 'asinhP', label: 'asinh(P/ε)', short: 'asinh(P/ε)' },
 	{ id: 'asinhPr2', label: 'asinh(P·r²/ε)', short: 'asinh(P·r²/ε)' },
-	{ id: 'SR', label: 'Ослабленное отношение рассеяния', short: 'P/P_мол' }
+	{ id: 'SR', label: 'Ослабленное отношение рассеяния', short: 'P/P_мол' },
+	{ id: 'SR_BA', label: 'Отношение рассеяния', short: 'R' }
 ];
 
 /** Scale factor for the asinh transforms: ε = 1e-6 in P/ε and P·r²/ε. */
@@ -41,7 +42,7 @@ export function unfoldTransformById(id) {
  * List distinct channels present in the given files, each with the number of
  * files that contain it. Labels and pairing follow the graph window convention.
  * @param {number[]} fileIds
- * @returns {Array<{ key: string, label: string, fileCount: number, molecularCount: number, wavelength: number, deviceID: string, polarization: string }>}
+ * @returns {Array<{ key: string, label: string, fileCount: number, molecularCount: number, retrievalCount: number, wavelength: number, deviceID: string, polarization: string }>}
  */
 export function listUnfoldChannels(fileIds) {
 	return collectDistinctChannels(get(licelFiles), fileIds).get('all') ?? [];
@@ -134,8 +135,15 @@ function applyUnfoldTransform(v, transform, distance) {
 function computeUnfoldMatrix(measurements, rowIndices, colIndices, binWidth, transform, zFactor) {
 	const cols = measurements.map((m) => m.profile.data);
 	const isRatio = transform === 'SR';
+	const isScatteringRatio = transform === 'SR_BA';
 	const molecular = isRatio
 		? measurements.map((m) => (m.profile.molecular && m.profile.molecular.data) || null)
+		: null;
+	const retrieval = isScatteringRatio
+		? measurements.map((m) => {
+				const r = m.profile.retrieval;
+				return r && r.betaTotal && r.betaMolecular ? r : null;
+			})
 		: null;
 	const y = new Array(rowIndices.length);
 	const z = new Array(rowIndices.length);
@@ -150,6 +158,11 @@ function computeUnfoldMatrix(measurements, rowIndices, colIndices, binWidth, tra
 				const denom = mol && j < mol.length ? mol[j] : NaN;
 				const num = cols[colIndices[c]][j];
 				row[c] = denom > 0 && Number.isFinite(num) ? num / denom : NaN;
+			} else if (isScatteringRatio) {
+				const ret = retrieval ? retrieval[colIndices[c]] : null;
+				const bm = ret && j < ret.betaMolecular.length ? ret.betaMolecular[j] : NaN;
+				const bt = ret && j < ret.betaTotal.length ? ret.betaTotal[j] : NaN;
+				row[c] = bm > 0 && Number.isFinite(bt) ? bt / bm : NaN;
 			} else {
 				row[c] = applyUnfoldTransform(cols[colIndices[c]][j], transform, distance);
 			}
@@ -233,6 +246,22 @@ export function buildUnfoldData(config) {
 			if (!mol || mol.length < nBins) {
 				return {
 					error: `Для канала ${profileLabel(m.profile)} не рассчитан профиль молекулярного рассеяния. Выполните «Молекулярную привязку» для всех выбранных файлов.`
+				};
+			}
+		}
+	}
+
+	if (transform === 'SR_BA') {
+		for (const m of measurements) {
+			const ret = m.profile.retrieval;
+			if (!ret || !ret.betaTotal || !ret.betaMolecular) {
+				return {
+					error: `Для канала ${profileLabel(m.profile)} не рассчитан коэффициент обратного аэрозольного рассеяния. Выполните «Расчёт по Клету» для всех выбранных файлов.`
+				};
+			}
+			if (ret.betaTotal.length < nBins || ret.betaMolecular.length < nBins) {
+				return {
+					error: `Длина профиля рассеяния канала ${profileLabel(m.profile)} меньше длины данных.`
 				};
 			}
 		}

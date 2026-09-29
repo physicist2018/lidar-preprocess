@@ -106,7 +106,7 @@ describe('klettFernald', () => {
 		}
 	});
 
-	it('leaves bins above the reference height as NaN (backward-only inversion)', () => {
+	it('fills bins above and below the reference height (two-way inversion)', () => {
 		const cos = 1;
 		const params = {
 			n: 50,
@@ -132,12 +132,12 @@ describe('klettFernald', () => {
 		expect(out.ok).toBe(true);
 		if (!out.ok) return;
 
-		for (let i = 0; i < 20; i++) {
+		for (let i = 0; i < r.length; i++) {
 			expect(Number.isFinite(out.betaAerosol[i])).toBe(true);
 		}
-		for (let i = 21; i < r.length; i++) {
-			expect(Number.isNaN(out.betaAerosol[i])).toBe(true);
-			expect(Number.isNaN(out.alphaAerosol[i])).toBe(true);
+		for (let i = 0; i < r.length; i++) {
+			const relErr = Math.abs(out.betaAerosol[i] - params.betaA) / params.betaA;
+			expect(relErr).toBeLessThan(0.03);
 		}
 	});
 

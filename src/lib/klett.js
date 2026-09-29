@@ -143,6 +143,25 @@ export function klettFernald(input) {
 		alphaTotal[k - 1] = alphaMolecular[k - 1] + alphaAerosol[k - 1];
 	}
 
+	for (let k = refIdx; k < n - 1; k++) {
+		const next = stepForward({
+			sNext: signal[k + 1],
+			sK: signal[k],
+			betaMNext: betaMolecular[k + 1],
+			betaMK: betaMolecular[k],
+			alphaMNext: alphaMolecular[k + 1],
+			alphaMK: alphaMolecular[k],
+			betaK: betaTotal[k],
+			Sa,
+			dz: r[k + 1] - r[k]
+		});
+		if (!Number.isFinite(next)) break;
+		betaTotal[k + 1] = next;
+		betaAerosol[k + 1] = next - betaMolecular[k + 1];
+		alphaAerosol[k + 1] = Sa * betaAerosol[k + 1];
+		alphaTotal[k + 1] = alphaMolecular[k + 1] + alphaAerosol[k + 1];
+	}
+
 	return {
 		betaAerosol,
 		alphaAerosol,
@@ -170,6 +189,26 @@ function stepBackward(p) {
 	const alphaMid = 0.5 * (alphaMPrev + alphaMK);
 	const betaAK = Math.max(betaK - betaMK, 0);
 	const Y = (sPrev / sK) * Math.exp(-2 * (alphaMid + Sa * betaAK) * dz);
+	return betaK * Y;
+}
+
+/**
+ * Single forward Klett step. Integrates upward from the reference point.
+ * @param {{
+ *   sNext: number, sK: number,
+ *   betaMNext: number, betaMK: number,
+ *   alphaMNext: number, alphaMK: number,
+ *   betaK: number, Sa: number, dz: number
+ * }} p
+ * @returns {number}
+ */
+function stepForward(p) {
+	const { sNext, sK, betaMNext, betaMK, alphaMNext, alphaMK, betaK, Sa, dz } = p;
+	if (!(sK > 0) || !(sNext > 0) || !(betaK > 0) || !(dz > 0) || !(Sa > 0)) return NaN;
+	if (!(betaMK > 0)) return NaN;
+	const alphaMid = 0.5 * (alphaMK + alphaMNext);
+	const betaAK = Math.max(betaK - betaMK, 0);
+	const Y = (sNext / sK) * Math.exp(2 * (alphaMid + Sa * betaAK) * dz);
 	return betaK * Y;
 }
 
