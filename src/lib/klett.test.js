@@ -252,6 +252,92 @@ describe('klettFernald', () => {
 		expect(Math.abs(out.betaAerosol[refIdx])).toBeLessThan(1e-18);
 		expect(Math.abs(out.alphaAerosol[refIdx])).toBeLessThan(1e-18);
 	});
+
+	it('in a pure molecular atmosphere R_ref = 1 keeps the scattering ratio R = 1 over the whole profile', () => {
+		const cos = 1;
+		const params = {
+			n: 60,
+			dz: 100,
+			betaM0: 1e-6,
+			H: 8000,
+			betaA: 0,
+			Sa: 40,
+			cosZenith: cos,
+			C: 1
+		};
+		const { r, signal, betaMolecular, alphaMolecular } = syntheticAtmosphere(params);
+		const refHeight = r[40];
+		const out = klettFernald({
+			signal,
+			r,
+			betaMolecular,
+			alphaMolecular,
+			refHeight,
+			lidarRatio: 40,
+			refScatteringRatio: 1
+		});
+		expect(out.ok).toBe(true);
+		if (!out.ok) return;
+		for (let i = 0; i < r.length; i++) {
+			expect(Number.isFinite(out.betaTotal[i])).toBe(true);
+			const R = out.betaTotal[i] / betaMolecular[i];
+			expect(Math.abs(R - 1)).toBeLessThan(1e-6);
+		}
+	});
+
+	it('rejects an aerosol-free anchor expressed as R_ref = β_a/β_m = 0', () => {
+		const cos = 1;
+		const params = {
+			n: 40,
+			dz: 100,
+			betaM0: 1e-6,
+			H: 8000,
+			betaA: 2e-6,
+			Sa: 40,
+			cosZenith: cos,
+			C: 1
+		};
+		const { r, signal, betaMolecular, alphaMolecular } = syntheticAtmosphere(params);
+		const out = klettFernald({
+			signal,
+			r,
+			betaMolecular,
+			alphaMolecular,
+			refHeight: r[30],
+			lidarRatio: 40,
+			refScatteringRatio: 0
+		});
+		expect(out.ok).toBe(false);
+		if (out.ok) return;
+		expect(out.error).toMatch(/R\(z_ref\)/);
+	});
+
+	it('rejects R_ref below the pure-molecular value of 1', () => {
+		const cos = 1;
+		const params = {
+			n: 40,
+			dz: 100,
+			betaM0: 1e-6,
+			H: 8000,
+			betaA: 2e-6,
+			Sa: 40,
+			cosZenith: cos,
+			C: 1
+		};
+		const { r, signal, betaMolecular, alphaMolecular } = syntheticAtmosphere(params);
+		const tooLow = klettFernald({
+			signal,
+			r,
+			betaMolecular,
+			alphaMolecular,
+			refHeight: r[30],
+			lidarRatio: 40,
+			refScatteringRatio: 0.5
+		});
+		expect(tooLow.ok).toBe(false);
+		if (tooLow.ok) return;
+		expect(tooLow.error).toMatch(/R\(z_ref\)/);
+	});
 });
 
 describe('molecularProfiles', () => {

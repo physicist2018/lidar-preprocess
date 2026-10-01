@@ -33,9 +33,10 @@
 // closure approximation is applied, and it is exact when β_a is constant
 // in the bin (the standard benchmark).
 //
-// Boundary condition: β(z_ref) = R_ref · β_m(z_ref),
-// where R_ref = β_a/β_m at the reference height (1 for purely molecular
-// calibration, larger when a known aerosol load is assumed).
+// Boundary condition: β(z_ref) = R_ref · β_m(z_ref), where R_ref is the total
+// scattering ratio at the reference height: R_ref = β/β_m = 1 + β_a/β_m
+// (1 for a purely molecular calibration point, larger when a known aerosol
+// load is assumed).
 // ---------------------------------------------------------------------------
 
 import { rayleighCrossSection, LRM, KB } from './molecular.js';
@@ -50,6 +51,10 @@ import { rayleighCrossSection, LRM, KB } from './molecular.js';
  *   lidarRatio: number,
  *   refScatteringRatio?: number
  * }} KlettInput
+ *
+ * The boundary parameter `refScatteringRatio` is the TOTAL scattering ratio
+ * R_ref = β/β_m = 1 + β_a/β_m at the reference height: 1 for a purely
+ * molecular calibration point, larger when a known aerosol load is assumed.
  *
  * @typedef {{
  *   betaAerosol: Float64Array,
@@ -114,7 +119,9 @@ export function klettFernald(input) {
 
 	const refBeta = refScatteringRatio * betaMRef;
 	betaTotal[refIdx] = refBeta;
-	betaAerosol[refIdx] = refBeta - betaMRef;
+	// Defensive clamp: R_ref >= 1 (validated above) and betaMRef > 0 guarantee
+	// refBeta - betaMRef >= 0, so this never reduces the anchor value.
+	betaAerosol[refIdx] = Math.max(refBeta - betaMRef, 0);
 	alphaAerosol[refIdx] = Sa * betaAerosol[refIdx];
 	alphaTotal[refIdx] = alphaMolecular[refIdx] + alphaAerosol[refIdx];
 
@@ -241,6 +248,10 @@ function validateKlettInput(input) {
 	}
 	if (!Number.isFinite(lidarRatio) || lidarRatio <= 0) {
 		return 'Лидарное отношение должно быть положительным числом.';
+	}
+	const rSR = input.refScatteringRatio ?? 1;
+	if (!Number.isFinite(rSR) || rSR < 1) {
+		return 'Отношение рассеяния R(z_ref) должно быть не меньше 1 (чисто молекулярная привязка — 1, иначе 1 + β_a/β_m).';
 	}
 	for (let i = 0; i < n; i++) {
 		if (

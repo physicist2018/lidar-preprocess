@@ -29,8 +29,8 @@ export const RETRIEVAL_ALGORITHMS = [
 			},
 			{
 				key: 'refScatteringRatio',
-				label: 'R(z_ref) = β_a/β_m',
-				min: 0,
+				label: 'R(z_ref) = 1 + β_a/β_m',
+				min: 1,
 				max: 100,
 				step: 0.01,
 				default: 1

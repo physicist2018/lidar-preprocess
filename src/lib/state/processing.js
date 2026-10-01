@@ -125,8 +125,10 @@ async function applyKlett(cfg) {
 		showError('Лидарное отношение должно быть положительным числом.');
 		return;
 	}
-	if (!Number.isFinite(refScatteringRatio) || refScatteringRatio < 0) {
-		showError('R(z_ref) должно быть неотрицательным числом.');
+	if (!Number.isFinite(refScatteringRatio) || refScatteringRatio < 1) {
+		showError(
+			'R(z_ref) должно быть не меньше 1 (чисто молекулярная привязка — 1, иначе 1 + β_a/β_m).'
+		);
 		return;
 	}
 
@@ -143,6 +145,12 @@ async function applyKlett(cfg) {
 		showError('Зенитный угол слишком велик для расчёта по Клетту.');
 		return;
 	}
+
+	// The user enters refHeight as a VERTICAL altitude (like the molecular
+	// anchoring range and the unfold/graph height axes), while klettFernald
+	// locates the anchor on its SLANT range grid r = (j + 0.5)·binWidth.
+	// Convert once per batch: slant = vertical / cos(zenith).
+	const slantRefHeight = refHeight / cosZenith;
 
 	const data = get(licelFiles);
 	const filter = cfg.channelKeys ?? null;
@@ -215,7 +223,7 @@ async function applyKlett(cfg) {
 			r,
 			betaMolecular,
 			alphaMolecular,
-			refHeight,
+			refHeight: slantRefHeight,
 			lidarRatio,
 			refScatteringRatio
 		});
