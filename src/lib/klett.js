@@ -15,14 +15,13 @@
 // need a top-to-bottom profile should choose z_ref at or above the top
 // of the aerosol layer of interest.
 //
-// Governing equation (slant optical depth, including the 1/cos(zenith)
-// factor absorbed into α via the molecular profile passed in by the caller):
+// Governing equation (slant optical depth):
 //   β(z) = β_m(z) + β_a(z)
 //   α(z) = α_m(z) + S_a · β_a(z)
 //   S(z) = C · β(z) · exp(-2 ∫_0^z α(z') dz')
 //
 // Discretized backward step (with the "β_a constant within a bin"
-// approximation). With α_m in slant units (divided by cos(zenith)):
+// approximation):
 //   Y = S(z_{k-1})/S(z_k) · exp(-2·(ᾱ_m · Δz + S_a·β_a(z_k)·Δz))
 //   β(z_{k-1}) = β(z_k) · Y
 //
@@ -324,13 +323,12 @@ export function molecularProfiles({ meteo, zGrid, wavelengthNm, cosZenith }) {
 	if (!(sigma > 0)) return { betaMolecular, alphaMolecular };
 
 	const { press, temp } = interpolatePressTemp(meteo, zGrid);
-	const invCos = 1 / cosZenith;
 	const betaFactor = (3 * sigma) / (8 * Math.PI);
 	for (let j = 0; j < n; j++) {
 		const density = press[j] / (KB * temp[j]);
 		const beta = betaFactor * density;
 		betaMolecular[j] = beta;
-		alphaMolecular[j] = beta * LRM * invCos;
+		alphaMolecular[j] = beta * LRM;
 	}
 	return { betaMolecular, alphaMolecular };
 }

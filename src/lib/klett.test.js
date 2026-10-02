@@ -360,7 +360,7 @@ describe('molecularProfiles', () => {
 		expect(alphaMolecular.length).toBe(zGrid.length);
 		for (let i = 0; i < betaMolecular.length; i++) {
 			expect(betaMolecular[i]).toBeGreaterThan(0);
-			expect(Math.abs(alphaMolecular[i] - (LRM * betaMolecular[i]) / cos)).toBeLessThan(1e-18);
+			expect(Math.abs(alphaMolecular[i] - LRM * betaMolecular[i])).toBeLessThan(1e-18);
 		}
 		expect(betaMolecular[0]).toBeGreaterThan(betaMolecular[betaMolecular.length - 1]);
 	});
