@@ -64,13 +64,14 @@
 			: 'P'
 	);
 	/** Whether at least one profile has retrieval (betaAerosol) data. */
-	let retrievalAvailable = $derived(
-		fileId != null
-			? (get(licelFiles).get(fileId)?.profiles ?? []).some(
-					/** @param {any} p */ (p) => p.retrieval?.betaAerosol != null
-				)
-			: false
-	);
+	let retrievalAvailable = $state(false);
+	$effect(() => {
+		// Re-evaluates when licelFiles store changes
+		const lf = fileId != null ? get(licelFiles).get(fileId) : null;
+		retrievalAvailable = lf
+			? lf.profiles.some(/** @param {any} p */ (p) => p.retrieval?.betaAerosol != null)
+			: false;
+	});
 	// Zenith angle whose height extent is currently refit into the x axis range.
 	let chartAlpha = /** @type {number | null} */ (null);
 
