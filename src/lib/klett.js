@@ -114,6 +114,8 @@ export function klettFernald(input) {
 	for (let i = 0; i < n; i++) {
 		betaAerosol[i] = NaN;
 		alphaAerosol[i] = NaN;
+		betaTotal[i] = NaN;
+		alphaTotal[i] = NaN;
 	}
 
 	const refBeta = refScatteringRatio * betaMRef;
@@ -136,13 +138,7 @@ export function klettFernald(input) {
 			Sa,
 			dz: r[k] - r[k - 1]
 		});
-		if (!Number.isFinite(prev)) {
-			return {
-				...emptyResults(),
-				ok: false,
-				error: `Численная неустойчивость Клетта на высоте ${r[k - 1].toFixed(0)} м.`
-			};
-		}
+		if (!Number.isFinite(prev)) break;
 		betaTotal[k - 1] = prev;
 		betaAerosol[k - 1] = Math.max(prev - betaMolecular[k - 1], 0);
 		alphaAerosol[k - 1] = Sa * betaAerosol[k - 1];
