@@ -1,6 +1,7 @@
 <script>
 	import { files, licelFiles, MODAL_Z_INDEX } from '$lib/state/store';
 	import { RETRIEVAL_ALGORITHMS, getAlgorithm } from '$lib/retrieval';
+	import { loadRetrievalPrefill, saveRetrievalConfig } from '$lib/state/retrieval-persist';
 	import { get } from 'svelte/store';
 	import { onMount } from 'svelte';
 
@@ -86,7 +87,22 @@
 		rebuildChannels();
 		const unsubFiles = files.subscribe(() => rebuildChannels());
 		const unsubData = licelFiles.subscribe(() => rebuildChannels());
+		let active = true;
+		loadRetrievalPrefill().then((prefill) => {
+			if (!active || !prefill) return;
+			selectedAlgorithm = prefill.algorithm;
+			params = { ...params, ...Object.fromEntries(
+				Object.entries(prefill.params).map(([k, v]) => [k, String(v)])
+			)};
+			/** @type {Record<string, boolean>} */
+			const next = {};
+			for (const ch of allChannels) {
+				next[ch.key] = prefill.channelKeys.includes(ch.key);
+			}
+			channelStates = next;
+		});
 		return () => {
+			active = false;
 			unsubFiles();
 			unsubData();
 		};
@@ -140,11 +156,13 @@
 		for (const p of currentParams) {
 			resolvedParams[p.key] = Number(params[p.key]);
 		}
-		onApply?.({
+		const cfg = {
 			algorithm: selectedAlgorithm,
 			params: resolvedParams,
 			channelKeys: selectedChannelKeys
-		});
+		};
+		saveRetrievalConfig(cfg).catch(() => {});
+		onApply?.(cfg);
 	}
 </script>
 
