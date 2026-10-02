@@ -135,24 +135,33 @@ export const SMOOTHING_ALGORITHMS = [
 				default: 300,
 				hint: 'Ширина переходной зоны сигмоиды: больше — мягче переход'
 			},
-			{
-				key: 'lambda',
-				label: 'λ (гладкость)',
-				type: 'number',
-				min: 0,
-				step: 0.001,
-				default: 1,
-				hint: 'Коэффициент регуляризации 2-й производной: больше — глаже'
-			},
-			{
-				key: 'mu',
-				label: 'μ (сила привязки)',
-				type: 'number',
-				min: 0,
-				step: 0.01,
-				default: 1,
-				hint: 'Вес привязки к молекулярному профилю в зоне q≈1'
-			}
+{
+			key: 'delta',
+			label: 'δ (вес данных)',
+			type: 'number',
+			min: 0,
+			step: 0.01,
+			default: 1,
+			hint: 'Вес привязки к данным: меньше — глаже, больше — точнее'
+		},
+		{
+			key: 'lambda',
+			label: 'λ (гладкость)',
+			type: 'number',
+			min: 0,
+			step: 0.001,
+			default: 1,
+			hint: 'Коэффициент регуляризации 2-й производной: больше — глаже'
+		},
+		{
+			key: 'mu',
+			label: 'μ (сила привязки)',
+			type: 'number',
+			min: 0,
+			step: 0.01,
+			default: 1,
+			hint: 'Вес привязки к молекулярному профилю в зоне q≈1'
+		}
 		]
 	},
 	{
@@ -627,20 +636,20 @@ function adaptiveSavitzkyGolay(data, params) {
 
 /**
  * Применяет алгоритм Тихонова 2-го порядка с подтяжкой к молекулярному
- * (референсному) профилю через сигмоидально-взвешенный функционал:
+ * (референсному) профилю:
  *
- *   Φ(f) = Σ (1 − qᵢ) wᵢ (fᵢ − yᵢ)²
+ *   Φ(f) = δ · Σ (1−qᵢ) wᵢ (fᵢ − yᵢ)²
  *        + λ · Σ (fᵢ₋₁ − 2fᵢ + fᵢ₊₁)²
  *        + μ · Σ qᵢ (fᵢ − yᵢᵐᵒˡ)²
  *
  * где
  *   yᵢ      = arcsinh(Sᵢ / ε)
  *   yᵢᵐᵒˡ   = arcsinh(Smolᵢ / ε)
- *   wᵢ      = Sᵢ                               (whitening-вес Пуассона)
- *   qᵢ      = 1 / (1 + exp(−(rᵢ − H) / L))     (мягкая привязка)
+ *   wᵢ      = Sᵢ / mean(S)                (нормализованный whiten-вес)
+ *   qᵢ      = 1 / (1 + exp(−(rᵢ − H) / L)) (мягкая привязка)
  *
  * Шаг 1. Стабилизация дисперсии: arcsinh с масштабом ε.
- * Шаг 2. Веса wᵢ = Sᵢ.
+ * Шаг 2. Веса wᵢ = Sᵢ / mean(S).
  * Шаг 3. Сигмоидный профиль привязки qᵢ на сетке дальностей r.
  * Шаг 4. Минимизация квадратичного SPD-функционала Φ(f) методом сопряжённых
  *         градиентов (CG, матрица собирается на лету через matvec).
@@ -653,6 +662,7 @@ function adaptiveSavitzkyGolay(data, params) {
  *   - `eps`      — масштаб arcsinh (по умолчанию 1e-3).
  *   - `H`        — центр перехода (м), по умолчанию 4000.
  *   - `L`        — ширина перехода (м), по умолчанию 300.
+ *   - `delta`    — вес привязки к данным, по умолчанию 1.
  *   - `lambda`   — вес регуляризации 2-й производной, по умолчанию 1.
  *   - `mu`       — вес привязки к молекулярному профилю, по умолчанию 1.
  *   - `Smol`     — молекулярный профиль, длина N. Если не задан — привязки нет.
@@ -677,6 +687,7 @@ export function tikhonovMolecularSmooth(S, params) {
 	const eps = Math.max(1e-30, Number(pr.eps ?? 1e-3));
 	const H = Number(pr.H ?? 4000);
 	const L = Math.max(1e-30, Number(pr.L ?? 300));
+	const delta = Math.max(0, Number(pr.delta ?? 1));
 	const lambda = Math.max(0, Number(pr.lambda ?? 1));
 	const mu = Math.max(0, Number(pr.mu ?? 1));
 	const tol = Number(pr.tol ?? 1e-8);
@@ -725,6 +736,13 @@ export function tikhonovMolecularSmooth(S, params) {
 	for (let i = 0; i < N; i++) {
 		w[i] = Math.max(0, S[i]);
 	}
+	// Нормализация: среднее w → 1, чтобы λ был в сопоставимой шкале
+	let sumW = 0;
+	for (let i = 0; i < N; i++) sumW += w[i];
+	const meanW = N > 0 ? sumW / N : 1;
+	if (meanW > 1e-30) {
+		for (let i = 0; i < N; i++) w[i] /= meanW;
+	}
 
 	// --- Шаг 3. Сигмоидальный профиль привязки -----------------------------
 	// q[i] = 1 / (1 + exp(-(r_i - H) / L)).
@@ -737,13 +755,13 @@ export function tikhonovMolecularSmooth(S, params) {
 	}
 
 	// Диагональные веса SPD-матрицы:
-	//   a_i = (1 − q_i) w_i   (привязка к данным)
+	//   a_i = δ (1−q_i) w_i   (привязка к данным с модуляцией q)
 	//   c_i = μ q_i           (привязка к молекулярному профилю)
 	const a = new Float64Array(N);
 	const c = new Float64Array(N);
 	let sumDiag = 0;
 	for (let i = 0; i < N; i++) {
-		a[i] = (1 - q[i]) * w[i];
+		a[i] = delta * (1 - q[i]) * w[i];
 		c[i] = mu * q[i];
 		sumDiag += a[i] + c[i];
 	}
@@ -752,7 +770,7 @@ export function tikhonovMolecularSmooth(S, params) {
 	}
 
 	// --- Шаг 4. CG-минимизация Φ(f) ----------------------------------------
-	// Φ квадратичный, SPD. Стартуем с f⁰ = (1 − q)·y + q·ymol.
+	// Φ квадратичный, SPD. Стартуем с f⁰ = (1−q)·y + q·ymol.
 	const f = new Float64Array(N);
 	for (let i = 0; i < N; i++) {
 		f[i] = (1 - q[i]) * y[i] + q[i] * ymol[i];
@@ -898,7 +916,7 @@ function fillGradient(g, f, y, ymol, a, c, lambda, N, u) {
  */
 function applyHessian(p, q, a, c, lambda, N, d) {
 	for (let i = 0; i < N; i++) {
-		q[i] = (a[i] + c[i]) * p[i];
+		q[i] = 2 * (a[i] + c[i]) * p[i];
 	}
 	if (lambda <= 0) return;
 
@@ -910,6 +928,6 @@ function applyHessian(p, q, a, c, lambda, N, d) {
 	for (let i = 0; i < N; i++) {
 		const ip = i + 1 < N ? i + 1 : i;
 		const im = i - 1 >= 0 ? i - 1 : i;
-		q[i] += lambda * (d[im] - 2 * d[i] + d[ip]);
+		q[i] += 2 * lambda * (d[im] - 2 * d[i] + d[ip]);
 	}
 }

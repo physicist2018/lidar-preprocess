@@ -515,7 +515,7 @@ describe('regularization algorithm', () => {
 	it('declares eps, H, L, lambda, mu parameters', () => {
 		const alg = getAlgorithm('regularization');
 		const keys = alg.params.map((p) => p.key);
-		expect(keys).toEqual(['eps', 'H', 'L', 'lambda', 'mu']);
+		expect(keys).toEqual(['eps', 'H', 'L', 'delta', 'lambda', 'mu']);
 	});
 
 	it('applySmoothingFn returns a finite Float64Array of the same length', () => {

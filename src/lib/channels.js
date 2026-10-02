@@ -110,11 +110,13 @@ export function sameChannelAxis(a, b) {
  * wavelength, device and polarization. Shared by the graph/unfold channel
  * picker and the merge dialog so their channel lists cannot drift apart.
  * A channel's `molecularCount` is the number of selected files in which the
- * channel already carries a computed pure molecular profile.
+ * channel already carries a computed pure molecular profile. `retrievalCount`
+ * is the number of files in which the channel carries a retrieval result
+ * (e.g. Klett) with a `betaAerosol` array.
  * @param {Map<number, any>} data
  * @param {number[]} fileIds
  * @param {(p: any) => string} [classify] group name; empty string skips the profile
- * @returns {Map<string, Array<{ key: string, label: string, fileCount: number, molecularCount: number, wavelength: number, deviceID: string, polarization: string }>>}
+ * @returns {Map<string, Array<{ key: string, label: string, fileCount: number, molecularCount: number, retrievalCount: number, wavelength: number, deviceID: string, polarization: string }>>}
  */
 export function collectDistinctChannels(data, fileIds, classify = () => 'all') {
 	/** @type {Map<string, Map<string, any>>} */
@@ -131,15 +133,20 @@ export function collectDistinctChannels(data, fileIds, classify = () => 'all') {
 		const key = profileKey(p);
 		const entry = found.get(key);
 		const hasMolecular = Boolean(p.molecular && p.molecular.data && p.molecular.data.length > 0);
+		const hasRetrieval = Boolean(
+			p.retrieval && p.retrieval.betaAerosol && p.retrieval.betaAerosol.length > 0
+		);
 		if (entry) {
 			entry.fileCount++;
 			if (hasMolecular) entry.molecularCount++;
+			if (hasRetrieval) entry.retrievalCount++;
 		} else {
 			found.set(key, {
 				key,
 				label: profileLabel(p),
 				fileCount: 1,
 				molecularCount: hasMolecular ? 1 : 0,
+				retrievalCount: hasRetrieval ? 1 : 0,
 				wavelength: p.wavelength,
 				deviceID: p.deviceID,
 				polarization: p.polarization

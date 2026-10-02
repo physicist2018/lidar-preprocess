@@ -96,6 +96,20 @@ export const smoothingProgress = writable(
 );
 
 /**
+ * Progress of the running retrieval batch (Klett-Fernald and successors),
+ * consumed by the global RetrievalProgressDialog overlay. Same shape as
+ * `smoothingProgress` so the dialog can share layout conventions.
+ */
+export const retrievalProgress = writable(
+	/** @type {{ active: boolean, done: number, total: number, label: string }} */ ({
+		active: false,
+		done: 0,
+		total: 0,
+		label: ''
+	})
+);
+
+/**
  * Snapshot of channel visibility (channel name -> enabled) remembered from a
  * graph window; applied to graph windows opened afterwards.
  */

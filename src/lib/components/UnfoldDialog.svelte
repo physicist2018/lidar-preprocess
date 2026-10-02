@@ -11,9 +11,16 @@
 	let selectedTransform = $state('P');
 	let totalSelected = $state(0);
 
-	/** Fall back to the plain signal transform when the scattering ratio is unavailable. */
-	function applyRatioFallback(/** @type {any} */ channel) {
+	/** Fall back to the plain signal transform when the scattering ratio or
+	 * retrieval-based transform is unavailable for the selected channel. */
+	function applyTransformFallback(/** @type {any} */ channel) {
 		if (selectedTransform === 'SR' && (!channel || channel.molecularCount !== channel.fileCount)) {
+			selectedTransform = 'P';
+		}
+		if (
+			selectedTransform === 'SR_BA' &&
+			(!channel || channel.retrievalCount !== channel.fileCount)
+		) {
 			selectedTransform = 'P';
 		}
 	}
@@ -26,7 +33,7 @@
 		if (!opts.some((o) => o.key === selectedChannelKey)) {
 			selectedChannelKey = opts[0]?.key ?? '';
 		}
-		applyRatioFallback(opts.find((o) => o.key === selectedChannelKey));
+		applyTransformFallback(opts.find((o) => o.key === selectedChannelKey));
 	}
 
 	$effect(() => {
@@ -45,10 +52,15 @@
 	const ratioAvailable = $derived(
 		Boolean(selectedChannel && selectedChannel.molecularCount === selectedChannel.fileCount)
 	);
+	/** Whether the selected channel has a retrieval result in every selected file. */
+	const retrievalAvailable = $derived(
+		Boolean(selectedChannel && selectedChannel.retrievalCount === selectedChannel.fileCount)
+	);
 	const canBuild = $derived(
 		Boolean(selectedChannelKey) &&
 			totalSelected > 0 &&
-			(selectedTransform !== 'SR' || ratioAvailable)
+			(selectedTransform !== 'SR' || ratioAvailable) &&
+			(selectedTransform !== 'SR_BA' || retrievalAvailable)
 	);
 
 	function handleBuild() {
@@ -115,7 +127,7 @@
 									checked={selectedChannelKey === ch.key}
 									onchange={() => {
 										selectedChannelKey = ch.key;
-										applyRatioFallback(ch);
+										applyTransformFallback(ch);
 									}}
 									class="accent-blue-600"
 								/>
@@ -138,9 +150,10 @@
 				</h3>
 				<div class="space-y-1.5">
 					{#each UNFOLD_TRANSFORMS as t (t.id)}
-						{@const srDisabled = t.id === 'SR' && !ratioAvailable}
+						{@const disabled =
+							(t.id === 'SR' && !ratioAvailable) || (t.id === 'SR_BA' && !retrievalAvailable)}
 						<label
-							class="flex cursor-pointer items-center gap-2 {srDisabled
+							class="flex cursor-pointer items-center gap-2 {disabled
 								? 'cursor-not-allowed opacity-50'
 								: ''}"
 						>
@@ -149,7 +162,7 @@
 								name="unfoldTransform"
 								value={t.id}
 								checked={selectedTransform === t.id}
-								disabled={srDisabled}
+								{disabled}
 								onchange={() => (selectedTransform = t.id)}
 								class="accent-blue-600"
 							/>
@@ -157,10 +170,19 @@
 						</label>
 					{/each}
 				</div>
-				{#if !ratioAvailable}
+				{#if !ratioAvailable || !retrievalAvailable}
 					<p class="mt-2 text-xs text-gray-400">
-						«Ослабленное отношение рассеяния» недоступно: рассчитайте профиль молекулярного
-						рассеяния («Молекулярная привязка») для всех выбранных файлов.
+						{#if !ratioAvailable}
+							«Ослабленное отношение рассеяния» недоступно: рассчитайте профиль молекулярного
+							рассеяния («Молекулярная привязка») для всех выбранных файлов.
+						{/if}
+						{#if !ratioAvailable && !retrievalAvailable}
+							<br />
+						{/if}
+						{#if !retrievalAvailable}
+							«Отношение рассеяния» недоступно: выполните расчёт коэффициента обратного аэрозольного
+							рассеяния («Расчёт по Клету») для всех выбранных файлов.
+						{/if}
 					</p>
 				{/if}
 			</div>

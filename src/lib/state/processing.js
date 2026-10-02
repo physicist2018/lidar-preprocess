@@ -8,6 +8,7 @@ import {
 	cropByHeightConfig,
 	smoothingConfig,
 	smoothingProgress,
+	retrievalProgress,
 	publishLicelData,
 	showError,
 	nextFileId
@@ -28,6 +29,7 @@ import {
 	medianValue
 } from '$lib/channels';
 import { computeMolecularRaw, anchorMolecular } from '$lib/molecular';
+import { klettFernald, molecularProfiles } from '$lib/klett';
 import { loadLicelFileFromBuffer, glueToAnalog, glueToPhoton } from 'licelfile-js';
 import { refreshFileSizes } from './zip-io';
 import { estimateLicelFileBytes } from '$lib/size';
@@ -43,6 +45,227 @@ function getSelectedFileIds() {
 		.map((f) => f.id);
 	if (ids.length === 0) showError('Не выделено ни одного файла.');
 	return ids.length > 0 ? ids : null;
+}
+
+// ---------------------------------------------------------------------------
+// Retrieval ("расчёт параметров аэрозоля")
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve after the browser has a chance to repaint, so progress updates
+ * written to the store are rendered between batch steps. No-op-guarded for
+ * non-browser environments (tests).
+ * @returns {Promise<void>}
+ */
+function yieldToEventLoop() {
+	if (typeof setTimeout === 'function') {
+		return new Promise((resolve) => setTimeout(resolve, 0));
+	}
+	return Promise.resolve();
+}
+
+/**
+ * Build the height grid `z[j] = (j + 0.5) · binWidth · cos(zenith)` (meters)
+ * and the matching slant range `r[j] = z[j] / cos(zenith)` for a profile.
+ * @param {any} p
+ * @param {number} cosZenith
+ * @returns {{ r: Float64Array, z: Float64Array }}
+ */
+function buildHeightGrid(p, cosZenith) {
+	const n = p.data.length;
+	const binWidth = Number(p.binWidth) || 0;
+	const r = new Float64Array(n);
+	const z = new Float64Array(n);
+	for (let j = 0; j < n; j++) {
+		r[j] = (j + 0.5) * binWidth;
+		z[j] = r[j] * cosZenith;
+	}
+	return { r, z };
+}
+
+/**
+ * @param {{ algorithm: string, params: Record<string, number>, channelKeys: string[] }} cfg
+ */
+export async function applyRetrieval(cfg) {
+	const labels = /** @type {Record<string, string>} */ ({
+		klett: '«Расчёт по Клету»',
+		ansmann: '«Расчёт по Ансману»',
+		'klett-ansmann': '«Клет+Ансман»',
+		'depolarization-total': '«Деполяризация (суммарная)»',
+		'depolarization-aerosol': '«Деполяризация (аэрозольная)»'
+	});
+	if (cfg.algorithm === 'klett') {
+		await applyKlett(cfg);
+		return;
+	}
+	showError(`Алгоритм ${labels[cfg.algorithm] ?? cfg.algorithm} ещё не реализован.`);
+}
+
+/**
+ * Run the Klett-Fernald elastic inversion for the selected channels of every
+ * selected file. Each profile must already carry a molecular anchoring
+ * (molecularState.meteo must be set); the algorithm recomputes β_m and α_m
+ * from the meteorological data instead of trusting the anchored `data`
+ * field, because the inversion needs the slant molecular extinction.
+ *
+ * @param {{ algorithm: string, params: Record<string, number>, channelKeys: string[] }} cfg
+ */
+async function applyKlett(cfg) {
+	const selected = getSelectedFileIds();
+	if (!selected) return;
+
+	const refHeight = Number(cfg.params.refHeight);
+	const lidarRatio = Number(cfg.params.lidarRatio);
+	const refScatteringRatio = Number(cfg.params.refScatteringRatio);
+	if (!Number.isFinite(refHeight) || refHeight <= 0) {
+		showError('Референсная высота должна быть положительным числом.');
+		return;
+	}
+	if (!Number.isFinite(lidarRatio) || lidarRatio <= 0) {
+		showError('Лидарное отношение должно быть положительным числом.');
+		return;
+	}
+	if (!Number.isFinite(refScatteringRatio) || refScatteringRatio < 1) {
+		showError(
+			'R(z_ref) должно быть не меньше 1 (чисто молекулярная привязка — 1, иначе 1 + β_a/β_m).'
+		);
+		return;
+	}
+
+	const meteoState = get(molecularState);
+	if (!meteoState.meteo || !(meteoState.meteo.heights instanceof Float64Array)) {
+		showError('Метеоданные не загружены. Сначала выполните молекулярную привязку.');
+		return;
+	}
+
+	const zenithDeg = get(zenithAngle);
+	const alphaRad = (zenithDeg * Math.PI) / 180;
+	const cosZenith = Math.cos(alphaRad);
+	if (!(cosZenith > 0.05)) {
+		showError('Зенитный угол слишком велик для расчёта по Клетту.');
+		return;
+	}
+
+	// The user enters refHeight as a VERTICAL altitude (like the molecular
+	// anchoring range and the unfold/graph height axes), while klettFernald
+	// locates the anchor on its SLANT range grid r = (j + 0.5)·binWidth.
+	// Convert once per batch: slant = vertical / cos(zenith).
+	const slantRefHeight = refHeight / cosZenith;
+
+	const data = get(licelFiles);
+	const filter = cfg.channelKeys ?? null;
+	/** @type {Map<number, string>} */
+	const fileNames = new Map(get(files).map((f) => [f.id, f.name]));
+
+	/**
+	 * Channel key matching the convention of RetrievalDialog.svelte
+	 * (`${wavelength}.${polarization}.${mode}` where mode is "A" for analog
+	 * BT or "D" for photon BC). The dialog filters by this signature, so
+	 * the same shape has to be used here.
+	 * @param {any} p
+	 */
+	const dialogChannelKey = (p) => {
+		const mode = p.photon === true ? 'D' : 'A';
+		return `${p.wavelength}.${(p.polarization || '').toUpperCase()}.${mode}`;
+	};
+
+	/** @type {Array<{ profile: any, fileName: string }>} */
+	const work = [];
+	const valid = forEachProfile(
+		data,
+		selected,
+		(p, lf, id) => {
+			const fileName = fileNames.get(id) ?? `#${id}`;
+			if (filter && !filter.includes(dialogChannelKey(p))) return;
+			if (!(p.wavelength > 0)) {
+				showError(
+					`Канал ${profileLabel(p)} файла "${fileName}" не содержит длину волны — расчёт невозможен.`
+				);
+				return false;
+			}
+			if (!(p.binWidth > 0)) {
+				showError(`Канал ${profileLabel(p)} файла "${fileName}" имеет некорректную ширину бина.`);
+				return false;
+			}
+			if (!allFinite(p.data)) {
+				showError(`Канал ${profileLabel(p)} файла "${fileName}" содержит нечисловые значения.`);
+				return false;
+			}
+			work.push({ profile: p, fileName });
+		},
+		{ includeInactive: false }
+	);
+	if (!valid) return;
+	if (work.length === 0) {
+		showError('Нет каналов, удовлетворяющих выбранным параметрам.');
+		return;
+	}
+
+	retrievalProgress.set({ active: true, done: 0, total: work.length, label: 'Расчёт по Клетту…' });
+
+	let failed = /** @type {string | null} */ (null);
+	for (let i = 0; i < work.length; i++) {
+		const { profile: p, fileName } = work[i];
+		const { r, z } = buildHeightGrid(p, cosZenith);
+		const signal = new Float64Array(p.data.length);
+		for (let j = 0; j < p.data.length; j++) {
+			const v = p.data[j];
+			signal[j] = v > 0 ? v * r[j] * r[j] : 0;
+		}
+		const { betaMolecular, alphaMolecular } = molecularProfiles({
+			meteo: meteoState.meteo,
+			zGrid: z,
+			wavelengthNm: p.wavelength,
+			cosZenith
+		});
+		const result = klettFernald({
+			signal,
+			r,
+			betaMolecular,
+			alphaMolecular,
+			refHeight: slantRefHeight,
+			lidarRatio,
+			refScatteringRatio
+		});
+		if (!result.ok) {
+			failed = `Канал ${profileLabel(p)} файла "${fileName}": ${result.error}`;
+			break;
+		}
+		p.retrieval = {
+			algorithm: 'klett',
+			betaAerosol: result.betaAerosol,
+			betaMolecular,
+			alphaAerosol: result.alphaAerosol,
+			betaTotal: result.betaTotal,
+			alphaTotal: result.alphaTotal,
+			refIndex: result.refIndex,
+			refHeight,
+			refScatteringRatio,
+			lidarRatio,
+			wavelengthNm: p.wavelength,
+			polarization: p.polarization,
+			mode: p.deviceID === 'BC' ? 'photon' : p.deviceID === 'BT' ? 'analog' : 'unknown',
+			cosZenith,
+			timestamp: new Date().toISOString()
+		};
+		retrievalProgress.set({
+			active: true,
+			done: i + 1,
+			total: work.length,
+			label: `Обработка файла ${i + 1} из ${work.length}…`
+		});
+		await yieldToEventLoop();
+	}
+
+	retrievalProgress.set({ active: false, done: 0, total: 0, label: '' });
+
+	if (failed) {
+		showError(`Расчёт по Клетту прерван: ${failed}`);
+		return;
+	}
+
+	publishLicelData(new Map(data), selected);
+	refreshFileSizes(selected);
 }
 
 // ---------------------------------------------------------------------------
@@ -356,19 +579,6 @@ export async function applySmoothing({ algorithm, params, channelKeys, options }
 	refreshFileSizes(selected);
 
 	smoothingConfig.set({ algorithm: '', params: {} });
-}
-
-/**
- * Resolve after the browser has a chance to repaint (macrotask), so progress
- * updates written to the store are actually rendered between batch steps.
- * No-op-guarded for non-browser environments (tests).
- * @returns {Promise<void>}
- */
-function yieldToEventLoop() {
-	if (typeof setTimeout === 'function') {
-		return new Promise((resolve) => setTimeout(resolve, 0));
-	}
-	return Promise.resolve();
 }
 
 /**

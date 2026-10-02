@@ -1,5 +1,5 @@
 <script>
-	import { smoothingProgress, MODAL_Z_INDEX } from '$lib/state/store';
+	import { retrievalProgress, MODAL_Z_INDEX } from '$lib/state/store';
 
 	let active = $state(false);
 	let done = $state(0);
@@ -7,7 +7,7 @@
 	let label = $state('');
 
 	$effect(() => {
-		const unsub = smoothingProgress.subscribe((val) => {
+		const unsub = retrievalProgress.subscribe((val) => {
 			active = val.active;
 			done = val.done;
 			total = val.total;
@@ -33,7 +33,7 @@
 			class="w-full max-w-md rounded-lg border border-gray-200 bg-white p-6 shadow-xl"
 		>
 			<div class="mb-3 flex items-center justify-between">
-				<span class="text-sm font-semibold text-gray-700">Сглаживание данных…</span>
+				<span class="text-sm font-semibold text-gray-700">Расчёт параметров аэрозоля…</span>
 				<span class="text-sm font-medium text-gray-500">{percent}%</span>
 			</div>
 
