@@ -5,6 +5,7 @@
 	import ErrorDialog from '$lib/components/ErrorDialog.svelte';
 	import SmoothProgressDialog from '$lib/components/SmoothProgressDialog.svelte';
 	import HelpDialog from '$lib/components/HelpDialog.svelte';
+	import WikiDialog from '$lib/components/WikiDialog.svelte';
 	import SessionPicker from '$lib/components/SessionPicker.svelte';
 	import { openWindows, leftPanelPercent, sessionEpoch } from '$lib/state/store';
 	import { addWindow } from '$lib/state/windows';
@@ -22,6 +23,7 @@
 	let windows = $state(/** @type {Array<any>} */ ([]));
 	let pickerOpen = $state(true);
 	let helpOpen = $state(false);
+	let docsOpen = $state(false);
 
 	onMount(async () => {
 		const boot = await bootSessions();
@@ -111,7 +113,19 @@
 				Сохранить (⌘S)
 			</button>
 			<button
-				onclick={() => (helpOpen = true)}
+				onclick={() => {
+					helpOpen = false;
+					docsOpen = true;
+				}}
+				class="rounded bg-gray-100 px-3 py-1.5 text-xs text-gray-700 transition-colors hover:bg-gray-200"
+			>
+				Документация
+			</button>
+			<button
+				onclick={() => {
+					docsOpen = false;
+					helpOpen = true;
+				}}
 				class="rounded bg-gray-100 px-3 py-1.5 text-xs text-gray-700 transition-colors hover:bg-gray-200"
 			>
 				Справка (F1)
@@ -197,6 +211,10 @@
 
 	{#if helpOpen}
 		<HelpDialog onClose={() => (helpOpen = false)} />
+	{/if}
+
+	{#if docsOpen}
+		<WikiDialog onClose={() => (docsOpen = false)} />
 	{/if}
 
 	<ErrorDialog />
