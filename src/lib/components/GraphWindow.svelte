@@ -65,13 +65,6 @@
 	);
 	/** Whether at least one profile has retrieval (betaAerosol) data. */
 	let retrievalAvailable = $state(false);
-	$effect(() => {
-		// Re-evaluates when licelFiles store changes
-		const lf = fileId != null ? get(licelFiles).get(fileId) : null;
-		retrievalAvailable = lf
-			? lf.profiles.some(/** @param {any} p */ (p) => p.retrieval?.betaAerosol != null)
-			: false;
-	});
 	// Zenith angle whose height extent is currently refit into the x axis range.
 	let chartAlpha = /** @type {number | null} */ (null);
 
@@ -87,6 +80,9 @@
 			displayMode = 'P';
 		}
 		channels = profilesToChannels(licel);
+		retrievalAvailable = licel.profiles.some(
+			/** @param {any} p */ (p) => p.retrieval?.betaAerosol != null
+		);
 	}
 
 	/**
@@ -242,6 +238,9 @@
 				) {
 					displayMode = 'P';
 				}
+				retrievalAvailable = next.profiles.some(
+					/** @param {any} p */ (p) => p.retrieval?.betaAerosol != null
+				);
 				const rebuilt = profilesToChannels(next);
 				const nextStates = { ...channelStates };
 				for (const ch of rebuilt) {
