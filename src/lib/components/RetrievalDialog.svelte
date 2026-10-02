@@ -91,6 +91,7 @@
 		loadRetrievalPrefill().then((prefill) => {
 			if (!active || !prefill) return;
 			selectedAlgorithm = prefill.algorithm;
+			rebuildChannels();
 			params = { ...params, ...Object.fromEntries(
 				Object.entries(prefill.params).map(([k, v]) => [k, String(v)])
 			)};
