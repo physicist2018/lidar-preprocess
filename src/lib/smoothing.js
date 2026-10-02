@@ -916,7 +916,7 @@ function fillGradient(g, f, y, ymol, a, c, lambda, N, u) {
  */
 function applyHessian(p, q, a, c, lambda, N, d) {
 	for (let i = 0; i < N; i++) {
-		q[i] = (a[i] + c[i]) * p[i];
+		q[i] = 2 * (a[i] + c[i]) * p[i];
 	}
 	if (lambda <= 0) return;
 
@@ -928,6 +928,6 @@ function applyHessian(p, q, a, c, lambda, N, d) {
 	for (let i = 0; i < N; i++) {
 		const ip = i + 1 < N ? i + 1 : i;
 		const im = i - 1 >= 0 ? i - 1 : i;
-		q[i] += lambda * (d[im] - 2 * d[i] + d[ip]);
+		q[i] += 2 * lambda * (d[im] - 2 * d[i] + d[ip]);
 	}
 }
