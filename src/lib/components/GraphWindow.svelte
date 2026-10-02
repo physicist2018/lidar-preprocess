@@ -65,7 +65,11 @@
 	);
 	/** Whether at least one profile has retrieval (betaAerosol) data. */
 	let retrievalAvailable = $derived(
-		licel ? licel.profiles.some(/** @param {any} p */ (p) => p.retrieval?.betaAerosol != null) : false
+		fileId != null
+			? (get(licelFiles).get(fileId)?.profiles ?? []).some(
+					/** @param {any} p */ (p) => p.retrieval?.betaAerosol != null
+				)
+			: false
 	);
 	// Zenith angle whose height extent is currently refit into the x axis range.
 	let chartAlpha = /** @type {number | null} */ (null);
