@@ -28,8 +28,16 @@ import {
 	meanValue,
 	medianValue
 } from '$lib/channels';
-import { computeMolecularRaw, anchorMolecular } from '$lib/molecular';
+import {
+	computeMolecularRaw,
+	anchorMolecular,
+	interpolateOnGrid,
+	KB,
+	rayleighCrossSection,
+	LRM
+} from '$lib/molecular';
 import { klettFernald, molecularProfiles } from '$lib/klett';
+import { ansmannRamanElastic, RR_PUMP_PAIRS } from '$lib/ansmann';
 import { loadLicelFileFromBuffer, glueToAnalog, glueToPhoton } from 'licelfile-js';
 import { refreshFileSizes } from './zip-io';
 import { estimateLicelFileBytes } from '$lib/size';
@@ -84,6 +92,26 @@ function buildHeightGrid(p, cosZenith) {
 }
 
 /**
+ * Range-correct the raw signal of a profile onto the slant range grid: the
+ * measured scattering of a volume falls off as the squared range, so the
+ * retrieval signal is S = P·r². Non-positive samples (after background
+ * subtraction) are clamped to 0 rather than producing negative logarithm
+ * inputs in the inversions.
+ * @param {any} p
+ * @param {Float64Array} r slant range grid (meters)
+ * @returns {Float64Array} the range-corrected signal S = P·r²
+ */
+function rangeCorrect(p, r) {
+	const n = Math.min(p.data.length, r.length);
+	const signal = new Float64Array(n);
+	for (let j = 0; j < n; j++) {
+		const v = p.data[j];
+		signal[j] = v > 0 ? v * r[j] * r[j] : 0;
+	}
+	return signal;
+}
+
+/**
  * @param {{ algorithm: string, params: Record<string, number>, channelKeys: string[] }} cfg
  */
 export async function applyRetrieval(cfg) {
@@ -96,6 +124,10 @@ export async function applyRetrieval(cfg) {
 	});
 	if (cfg.algorithm === 'klett') {
 		await applyKlett(cfg);
+		return;
+	}
+	if (cfg.algorithm === 'ansmann') {
+		await applyAnsmann(cfg);
 		return;
 	}
 	showError(`Алгоритм ${labels[cfg.algorithm] ?? cfg.algorithm} ещё не реализован.`);
@@ -207,11 +239,7 @@ async function applyKlett(cfg) {
 	for (let i = 0; i < work.length; i++) {
 		const { profile: p, fileName } = work[i];
 		const { r, z } = buildHeightGrid(p, cosZenith);
-		const signal = new Float64Array(p.data.length);
-		for (let j = 0; j < p.data.length; j++) {
-			const v = p.data[j];
-			signal[j] = v > 0 ? v * r[j] * r[j] : 0;
-		}
+		const signal = rangeCorrect(p, r);
 		const { betaMolecular, alphaMolecular } = molecularProfiles({
 			meteo: meteoState.meteo,
 			zGrid: z,
@@ -261,6 +289,185 @@ async function applyKlett(cfg) {
 
 	if (failed) {
 		showError(`Расчёт по Клетту прерван: ${failed}`);
+		return;
+	}
+
+	publishLicelData(new Map(data), selected);
+	refreshFileSizes(selected);
+}
+
+/**
+ * Run the Ansmann rotational-Raman retrieval for the selected channels of every
+ * selected file. Each processed channel must be a rotational Raman reference
+ * (353 or 530 nm); the elastic pump wavelength is taken from RR_PUMP_PAIRS.
+ * The molecular (Rayleigh) extinction and air density are recomputed from the
+ * meteorological data on the channel grid, so no absolute calibration is
+ * needed — the system constant cancels in the logarithmic derivative.
+ *
+ * @param {{ algorithm: string, params: Record<string, number>, channelKeys: string[] }} cfg
+ */
+async function applyAnsmann(cfg) {
+	const selected = getSelectedFileIds();
+	if (!selected) return;
+
+	const angstromExponent = Number(cfg.params.angstromExponent);
+	const derivativeWindow = Number(cfg.params.derivativeWindow);
+	const deadZone = Number(cfg.params.deadZone);
+	if (!Number.isFinite(angstromExponent) || angstromExponent < 0 || angstromExponent > 3) {
+		showError('Показатель Ангстрёма должен быть числом от 0 до 3.');
+		return;
+	}
+	if (!Number.isFinite(derivativeWindow) || derivativeWindow < 3) {
+		showError('Окно производной должно быть целым числом от 3 бинов.');
+		return;
+	}
+	if (!Number.isFinite(deadZone) || deadZone < 0) {
+		showError('Мёртвая зона должна быть неотрицательным числом метров.');
+		return;
+	}
+
+	const meteoState = get(molecularState);
+	if (!meteoState.meteo || !(meteoState.meteo.heights instanceof Float64Array)) {
+		showError('Метеоданные не загружены. Сначала выполните молекулярную привязку.');
+		return;
+	}
+
+	const zenithDeg = get(zenithAngle);
+	const alphaRad = (zenithDeg * Math.PI) / 180;
+	const cosZenith = Math.cos(alphaRad);
+	if (!(cosZenith > 0.05)) {
+		showError('Зенитный угол слишком велик для расчёта по Ансману.');
+		return;
+	}
+
+	const data = get(licelFiles);
+	const filter = cfg.channelKeys ?? null;
+	/** @type {Map<number, string>} */
+	const fileNames = new Map(get(files).map((f) => [f.id, f.name]));
+
+	/**
+	 * Channel key matching the convention of RetrievalDialog.svelte
+	 * (`${wavelength}.${polarization}.${mode}`).
+	 * @param {any} p
+	 */
+	const dialogChannelKey = (p) => {
+		const mode = p.photon === true ? 'D' : 'A';
+		return `${p.wavelength}.${(p.polarization || '').toUpperCase()}.${mode}`;
+	};
+
+	/** @type {Array<{ profile: any, fileName: string, pump: number }>} */
+	const work = [];
+	const valid = forEachProfile(
+		data,
+		selected,
+		(p, lf, id) => {
+			const fileName = fileNames.get(id) ?? `#${id}`;
+			if (filter && !filter.includes(dialogChannelKey(p))) return;
+			const pump = RR_PUMP_PAIRS[/** @type {number} */ (p.wavelength)];
+			if (!pump) {
+				showError(
+					`Канал ${profileLabel(p)} файла "${fileName}" не является рамановским опорным (ожидались 353 или 530 нм).`
+				);
+				return false;
+			}
+			if (!(p.binWidth > 0)) {
+				showError(`Канал ${profileLabel(p)} файла "${fileName}" имеет некорректную ширину бина.`);
+				return false;
+			}
+			if (!allFinite(p.data)) {
+				showError(`Канал ${profileLabel(p)} файла "${fileName}" содержит нечисловые значения.`);
+				return false;
+			}
+			work.push({ profile: p, fileName, pump });
+		},
+		{ includeInactive: false }
+	);
+	if (!valid) return;
+	if (work.length === 0) {
+		showError('Нет каналов, удовлетворяющих выбранным параметрам.');
+		return;
+	}
+
+	retrievalProgress.set({ active: true, done: 0, total: work.length, label: 'Расчёт по Ансману…' });
+
+	let failed = /** @type {string | null} */ (null);
+	for (let i = 0; i < work.length; i++) {
+		const { profile: p, fileName, pump } = work[i];
+		const binWidth = Number(p.binWidth);
+		const n = p.data.length;
+		const { r, z } = buildHeightGrid(p, cosZenith);
+		const signal = rangeCorrect(p, r);
+		const { press, temp } = interpolateOnGrid(meteoState.meteo, z);
+		/** @type {Float64Array} */
+		const density = new Float64Array(n);
+		for (let j = 0; j < n; j++) density[j] = press[j] / (KB * temp[j]);
+		// The molecular extinction in the app's convention is
+		// α_m(λ) = LRM · (3σ(λ)/(8π)) · N  — the same density drives both the
+		// pump and the rotational-Raman wavelengths, so a single interpolation
+		// plus a per-wavelength scalar factor suffices (mirrors molecularProfiles).
+		const pumpFactor = LRM * ((3 * rayleighCrossSection(pump)) / (8 * Math.PI));
+		const ramanFactor = LRM * ((3 * rayleighCrossSection(p.wavelength)) / (8 * Math.PI));
+		/** @type {Float64Array} */
+		const alphaMolecularPump = new Float64Array(n);
+		/** @type {Float64Array} */
+		const alphaMolecularRaman = new Float64Array(n);
+		for (let j = 0; j < n; j++) {
+			alphaMolecularPump[j] = pumpFactor * density[j];
+			alphaMolecularRaman[j] = ramanFactor * density[j];
+		}
+
+		const slantDead = deadZone / cosZenith;
+		const startIndex =
+			slantDead <= 0 ? 0 : Math.max(0, Math.min(n - 1, Math.ceil(slantDead / binWidth)));
+
+		const result = ansmannRamanElastic({
+			signal,
+			r,
+			density,
+			alphaMolecularPump,
+			alphaMolecularRaman,
+			pumpWavelength: pump,
+			ramanWavelength: p.wavelength,
+			angstromExponent,
+			derivativeWindow,
+			startIndex
+		});
+		if (!result.ok) {
+			failed = `Канал ${profileLabel(p)} файла "${fileName}": ${result.error}`;
+			break;
+		}
+		p.retrieval = {
+			algorithm: 'ansmann',
+			alphaAerosol: result.alphaAerosol,
+			betaAerosol: null,
+			betaTotal: null,
+			betaMolecular: null,
+			derivativeLogRatio: result.derivativeLogRatio,
+			pumpWavelength: pump,
+			ramanWavelength: p.wavelength,
+			angstromExponent,
+			derivativeWindow,
+			deadZone,
+			startIndex: result.startIndex,
+			wavelengthNm: p.wavelength,
+			polarization: p.polarization,
+			mode: p.deviceID === 'BC' ? 'photon' : p.deviceID === 'BT' ? 'analog' : 'unknown',
+			cosZenith,
+			timestamp: new Date().toISOString()
+		};
+		retrievalProgress.set({
+			active: true,
+			done: i + 1,
+			total: work.length,
+			label: `Обработка файла ${i + 1} из ${work.length}…`
+		});
+		await yieldToEventLoop();
+	}
+
+	retrievalProgress.set({ active: false, done: 0, total: 0, label: '' });
+
+	if (failed) {
+		showError(`Расчёт по Ансману прерван: ${failed}`);
 		return;
 	}
 
