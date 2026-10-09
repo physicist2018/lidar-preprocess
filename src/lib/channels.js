@@ -134,7 +134,9 @@ export function collectDistinctChannels(data, fileIds, classify = () => 'all') {
 		const entry = found.get(key);
 		const hasMolecular = Boolean(p.molecular && p.molecular.data && p.molecular.data.length > 0);
 		const hasRetrieval = Boolean(
-			p.retrieval && p.retrieval.betaAerosol && p.retrieval.betaAerosol.length > 0
+			p.retrieval &&
+			((p.retrieval.betaAerosol && p.retrieval.betaAerosol.length > 0) ||
+				(p.retrieval.alphaAerosol && p.retrieval.alphaAerosol.length > 0))
 		);
 		if (entry) {
 			entry.fileCount++;

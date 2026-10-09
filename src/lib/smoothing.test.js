@@ -5,7 +5,8 @@ import {
 	applySmoothingFn,
 	tikhonovMolecularSmooth,
 	inverseArsinh,
-	regularizationSmooth
+	regularizationSmooth,
+	savitzkyGolayDerivative
 } from './smoothing';
 
 /**
@@ -244,6 +245,88 @@ describe('applySmoothingFn — savitzky_golay', () => {
 		expect(result.length).toBe(5);
 		for (let i = 0; i < result.length; i++) {
 			expect(Number.isFinite(result[i])).toBe(true);
+		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// savitzkyGolayDerivative
+// ---------------------------------------------------------------------------
+
+describe('savitzkyGolayDerivative', () => {
+	it('returns zero for a constant signal', () => {
+		const n = 61;
+		const data = new Float64Array(n);
+		data.fill(42);
+		for (const w of [5, 11, 21]) {
+			const out = savitzkyGolayDerivative(data, w, 1);
+			for (let i = 0; i < n; i++) {
+				expect(out[i]).toBeCloseTo(0, 10);
+			}
+		}
+	});
+
+	it('recovers the exact slope of a linear signal over the whole window', () => {
+		const n = 61;
+		const data = new Float64Array(n);
+		for (let i = 0; i < n; i++) data[i] = 3 * i + 7;
+		const out = savitzkyGolayDerivative(data, 11, 1);
+		for (let i = 0; i < n; i++) {
+			expect(out[i]).toBeCloseTo(3, 6);
+		}
+	});
+
+	it('scales the slope by 1/dx in physical units', () => {
+		const n = 41;
+		const data = new Float64Array(n);
+		for (let i = 0; i < n; i++) data[i] = i; // dy/dr = 1/75 при dx = 75 м
+		const out = savitzkyGolayDerivative(data, 9, 75);
+		for (let i = 0; i < n; i++) {
+			expect(out[i]).toBeCloseTo(1 / 75, 8);
+		}
+	});
+
+	it('approximates the derivative of a quadratic on interior bins', () => {
+		const n = 201;
+		const data = new Float64Array(n);
+		for (let i = 0; i < n; i++) data[i] = i * i;
+		const out = savitzkyGolayDerivative(data, 21, 1);
+		for (let i = 60; i < 140; i++) {
+			const expected = 2 * i;
+			const relErr = Math.abs(out[i] - expected) / expected;
+			expect(relErr).toBeLessThan(0.01);
+		}
+	});
+
+	it('handles empty input', () => {
+		const out = savitzkyGolayDerivative(new Float64Array(0), 5, 1);
+		expect(out.length).toBe(0);
+	});
+
+	it('returns NaN where the window contains a non-finite sample', () => {
+		const data = new Float64Array([1, 2, NaN, 4, 5, 6, 7, 8, 9]);
+		const out = savitzkyGolayDerivative(data, 5, 1);
+		for (let i = 0; i < 5; i++) expect(Number.isNaN(out[i])).toBe(true);
+		expect(Number.isFinite(out[5])).toBe(true);
+		expect(Number.isFinite(out[8])).toBe(true);
+	});
+
+	it('accepts even window sizes by reducing to odd', () => {
+		const data = new Float64Array(21);
+		for (let i = 0; i < 21; i++) data[i] = i;
+		const odd = savitzkyGolayDerivative(data, 11, 1);
+		const even = savitzkyGolayDerivative(data, 12, 1);
+		for (let i = 0; i < 21; i++) {
+			expect(odd[i]).toBeCloseTo(even[i], 12);
+		}
+	});
+
+	it('small-array derivative is finite or NaN, never Infinity', () => {
+		for (const data of [[42], [1, 2], [1, 2, 3], [1, 2, 3, 4, 5]]) {
+			const out = savitzkyGolayDerivative(Float64Array.from(data), 5, 1);
+			for (let i = 0; i < out.length; i++) {
+				expect(Number.isNaN(out[i]) || Number.isFinite(out[i])).toBe(true);
+			}
 		}
 	});
 });

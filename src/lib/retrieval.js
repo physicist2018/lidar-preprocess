@@ -48,8 +48,35 @@ export const RETRIEVAL_ALGORITHMS = [
 	{
 		id: 'ansmann',
 		label: 'Расчёт по Ансману',
-		requiresMolecular: false,
-		params: []
+		requiresMolecular: true,
+		allowedWavelengths: [353, 530],
+		allowedPolarizations: ['P', 'O'],
+		params: [
+			{
+				key: 'angstromExponent',
+				label: 'Показатель Ангстрёма (k)',
+				min: 0,
+				max: 3,
+				step: 0.05,
+				default: 1
+			},
+			{
+				key: 'derivativeWindow',
+				label: 'Окно производной (бинов)',
+				min: 3,
+				max: 101,
+				step: 2,
+				default: 11
+			},
+			{
+				key: 'deadZone',
+				label: 'Мёртвая зона (м)',
+				min: 0,
+				max: 30000,
+				step: 5,
+				default: 0
+			}
+		]
 	},
 	{
 		id: 'klett-ansmann',

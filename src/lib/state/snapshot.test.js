@@ -43,6 +43,33 @@ describe('sanitizeSnapshot', () => {
 		expect(warnings.length).toBeGreaterThan(0);
 	});
 
+	it('keeps retrieval payloads (e.g. Ansmann alphaAerosol) inside file data', () => {
+		const alphaAerosol = new Float64Array([1e-4, 2e-4, NaN]);
+		const { snapshot, warnings } = sanitizeSnapshot({
+			files: [
+				{
+					id: 1,
+					name: 'a.lcd',
+					lf: {
+						profiles: [
+							{
+								nDataPoints: 3,
+								retrieval: { algorithm: 'ansmann', alphaAerosol }
+							}
+						]
+					}
+				}
+			],
+			windows: []
+		});
+		expect(warnings).toEqual([]);
+		const prof = /** @type {any} */ (snapshot.files[0].lf.profiles[0]);
+		expect(prof.retrieval.algorithm).toBe('ansmann');
+		expect(prof.retrieval.alphaAerosol).toBe(alphaAerosol);
+		expect(prof.retrieval.alphaAerosol[1]).toBe(2e-4);
+		expect(Number.isNaN(prof.retrieval.alphaAerosol[2])).toBe(true);
+	});
+
 	it('drops windows that are not objects or have no title', () => {
 		const { snapshot, warnings } = sanitizeSnapshot({
 			files: [],

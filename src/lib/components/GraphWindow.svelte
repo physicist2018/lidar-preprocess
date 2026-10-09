@@ -13,7 +13,7 @@
 
 	/** @typedef {import('licelfile-js').LicelFile} LicelFile */
 	/** @typedef {import('licelfile-js').LicelProfile} LicelProfile */
-	/** @typedef {import('licelfile-js').LicelProfile & { molecular?: { data: ArrayLike<number>, zenithDeg?: number }, retrieval?: { betaAerosol: Float64Array, betaTotal: Float64Array, betaMolecular: Float64Array } }} ProfileWithMolecular */
+	/** @typedef {import('licelfile-js').LicelProfile & { molecular?: { data: ArrayLike<number>, zenithDeg?: number }, retrieval?: { betaAerosol: Float64Array, betaTotal: Float64Array, betaMolecular: Float64Array, alphaAerosol?: Float64Array } }} ProfileWithMolecular */
 
 	/** @type {{ id: number, fileName: string, fileId?: number | null, initialView?: any }} */
 	let { id, fileName, fileId = null, initialView = null } = $props();
@@ -59,7 +59,9 @@
 	);
 	// Display mode: 'P' (raw signal / range-corrected), 'beta' (aerosol backscatter), 'R' (scattering ratio).
 	let displayMode = $state(
-		initialView?.displayMode === 'beta' || initialView?.displayMode === 'R'
+		initialView?.displayMode === 'beta' ||
+			initialView?.displayMode === 'R' ||
+			initialView?.displayMode === 'alpha'
 			? initialView.displayMode
 			: 'P'
 	);
@@ -75,13 +77,17 @@
 		// Fall back to P mode if the restored session had beta/R but the data lacks retrieval.
 		if (
 			displayMode !== 'P' &&
-			!licel.profiles.some(/** @param {any} p */ (p) => p.retrieval?.betaAerosol != null)
+			!licel.profiles.some(
+				/** @param {any} p */ (p) =>
+					p.retrieval?.betaAerosol != null || p.retrieval?.alphaAerosol != null
+			)
 		) {
 			displayMode = 'P';
 		}
 		channels = profilesToChannels(licel);
 		retrievalAvailable = licel.profiles.some(
-			/** @param {any} p */ (p) => p.retrieval?.betaAerosol != null
+			/** @param {any} p */ (p) =>
+				p.retrieval?.betaAerosol != null || p.retrieval?.alphaAerosol != null
 		);
 	}
 
@@ -113,6 +119,7 @@
 		const cosAlpha = Math.cos(alphaRad);
 		const isBeta = displayMode === 'beta';
 		const isRatio = displayMode === 'R';
+		const isAlpha = displayMode === 'alpha';
 		return (lf.profiles ?? [])
 			.filter((p) => p.active !== false)
 			.map((/** @type {ProfileWithMolecular} */ p, i) => {
@@ -147,6 +154,18 @@
 							points.push({ x: j * binWidth * cosAlpha, y: num / denom });
 						}
 					}
+				} else if (isAlpha) {
+					// Aerosol extinction coefficient (α_aerosol) — Ansmann output
+					const alphaA = p.retrieval?.alphaAerosol;
+					if (!alphaA) return null;
+					const n = alphaA.length;
+					points = [];
+					for (let j = 0; j < n; j++) {
+						const y = alphaA[j];
+						if (Number.isFinite(y)) {
+							points.push({ x: j * binWidth * cosAlpha, y });
+						}
+					}
 				} else {
 					// Raw signal P (with optional range correction)
 					const data = p.data ? Array.from(p.data) : [];
@@ -158,9 +177,7 @@
 						const molecular = p.molecular.data;
 						const n = Math.min(molecular.length, data.length);
 						const anchorZenithDeg =
-							typeof p.molecular.zenithDeg === 'number'
-								? p.molecular.zenithDeg
-								: get(zenithAngle);
+							typeof p.molecular.zenithDeg === 'number' ? p.molecular.zenithDeg : get(zenithAngle);
 						const anchorDz = binWidth * Math.cos((anchorZenithDeg * Math.PI) / 180);
 						const currentDz = binWidth * cosAlpha;
 						const values =
@@ -172,7 +189,10 @@
 						for (let j = 0; j < n; j++) {
 							const y = values[j];
 							if (!Number.isFinite(y)) continue;
-							molecularPoints[count++] = { x: j * binWidth * cosAlpha, y: correctY(y, j, binWidth) };
+							molecularPoints[count++] = {
+								x: j * binWidth * cosAlpha,
+								y: correctY(y, j, binWidth)
+							};
 						}
 						if (count === 0) molecularPoints = null;
 						else if (count < n) molecularPoints = molecularPoints.slice(0, count);
@@ -183,7 +203,7 @@
 					name: profileLabel(p),
 					color: channelPalette[i % channelPalette.length],
 					points,
-					molecularPoints: isBeta || isRatio ? null : molecularPoints
+					molecularPoints: isBeta || isRatio || isAlpha ? null : molecularPoints
 				};
 			})
 			.filter(/** @returns {boolean} */ (ch) => ch != null)
@@ -234,12 +254,16 @@
 				// Fall back to P mode if retrieval data is no longer available.
 				if (
 					displayMode !== 'P' &&
-					!next.profiles.some(/** @param {any} p */ (p) => p.retrieval?.betaAerosol != null)
+					!next.profiles.some(
+						/** @param {any} p */ (p) =>
+							p.retrieval?.betaAerosol != null || p.retrieval?.alphaAerosol != null
+					)
 				) {
 					displayMode = 'P';
 				}
 				retrievalAvailable = next.profiles.some(
-					/** @param {any} p */ (p) => p.retrieval?.betaAerosol != null
+					/** @param {any} p */ (p) =>
+						p.retrieval?.betaAerosol != null || p.retrieval?.alphaAerosol != null
 				);
 				const rebuilt = profilesToChannels(next);
 				const nextStates = { ...channelStates };
@@ -301,7 +325,9 @@
 			? 'β, км⁻¹·ср⁻¹'
 			: displayMode === 'R'
 				? 'R'
-				: 'Сигнал';
+				: displayMode === 'alpha'
+					? 'α, м⁻¹'
+					: 'Сигнал';
 	}
 
 	function initChart() {
@@ -488,7 +514,7 @@
 	}
 
 	function handleToggleProfileTransform() {
-		if (displayMode === 'beta') return;
+		if (displayMode === 'beta' || displayMode === 'alpha') return;
 		const next = profileTransform === 'P' ? 'Pr2' : 'P';
 		profileTransform = next;
 		if (licel) {
@@ -541,10 +567,12 @@
 			<label class="text-xs font-semibold tracking-wider text-gray-500 uppercase">Тип данных</label>
 			<select
 				value={displayMode}
-				onchange={(/** @type {Event} */ e) => handleDisplayModeChange(/** @type {HTMLSelectElement} */ (e.target).value)}
+				onchange={(/** @type {Event} */ e) =>
+					handleDisplayModeChange(/** @type {HTMLSelectElement} */ (e.target).value)}
 				class="mt-1 w-full rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700"
 			>
 				<option value="P">P</option>
+				<option value="alpha" disabled={!retrievalAvailable}>α</option>
 				<option value="beta" disabled={!retrievalAvailable}>β</option>
 				<option value="R" disabled={!retrievalAvailable}>R</option>
 			</select>
@@ -572,15 +600,19 @@
 			</button>
 			<button
 				onclick={handleToggleProfileTransform}
-				disabled={displayMode === 'beta'}
+				disabled={displayMode === 'beta' || displayMode === 'alpha'}
 				class="w-full rounded px-2 py-1.5 text-xs font-medium transition-colors {displayMode ===
-				'beta'
-					? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+					'beta' || displayMode === 'alpha'
+					? 'cursor-not-allowed bg-gray-100 text-gray-400'
 					: profileTransform === 'Pr2'
 						? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
 						: 'bg-gray-100 text-gray-700 hover:bg-gray-200'}"
 			>
-				{displayMode === 'beta' ? 'P/P·r²' : profileTransform === 'Pr2' ? 'P·r²' : 'P'}
+				{displayMode === 'beta' || displayMode === 'alpha'
+					? 'P/P·r²'
+					: profileTransform === 'Pr2'
+						? 'P·r²'
+						: 'P'}
 			</button>
 		</div>
 	</div>

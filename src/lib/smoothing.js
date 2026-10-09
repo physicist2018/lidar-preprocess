@@ -135,33 +135,33 @@ export const SMOOTHING_ALGORITHMS = [
 				default: 300,
 				hint: 'Ширина переходной зоны сигмоиды: больше — мягче переход'
 			},
-{
-			key: 'delta',
-			label: 'δ (вес данных)',
-			type: 'number',
-			min: 0,
-			step: 0.01,
-			default: 1,
-			hint: 'Вес привязки к данным: меньше — глаже, больше — точнее'
-		},
-		{
-			key: 'lambda',
-			label: 'λ (гладкость)',
-			type: 'number',
-			min: 0,
-			step: 0.001,
-			default: 1,
-			hint: 'Коэффициент регуляризации 2-й производной: больше — глаже'
-		},
-		{
-			key: 'mu',
-			label: 'μ (сила привязки)',
-			type: 'number',
-			min: 0,
-			step: 0.01,
-			default: 1,
-			hint: 'Вес привязки к молекулярному профилю в зоне q≈1'
-		}
+			{
+				key: 'delta',
+				label: 'δ (вес данных)',
+				type: 'number',
+				min: 0,
+				step: 0.01,
+				default: 1,
+				hint: 'Вес привязки к данным: меньше — глаже, больше — точнее'
+			},
+			{
+				key: 'lambda',
+				label: 'λ (гладкость)',
+				type: 'number',
+				min: 0,
+				step: 0.001,
+				default: 1,
+				hint: 'Коэффициент регуляризации 2-й производной: больше — глаже'
+			},
+			{
+				key: 'mu',
+				label: 'μ (сила привязки)',
+				type: 'number',
+				min: 0,
+				step: 0.01,
+				default: 1,
+				hint: 'Вес привязки к молекулярному профилю в зоне q≈1'
+			}
 		]
 	},
 	{
@@ -628,6 +628,64 @@ function adaptiveSavitzkyGolay(data, params) {
 	}
 
 	return result;
+}
+
+/**
+ * Производная скользящим окном наименьших квадратов (Савицкий-Голей,
+ * полином 1-го порядка, первая производная). Для каждого бина окну
+ * подбирается линейный тренд y ~= a0 + a1*x (x - индекс, смещённый к центру),
+ * возвращается a1/dx - производная по физической координате. На краях
+ * массива используется частичное окно с полным МНК-решением, учитывающим
+ * асимметрию. Нечисловое значение в окне даёт NaN в данном бине.
+ * @param {Float64Array} values - входная последовательность
+ * @param {number} windowSize - нечётное целое >= 3 (чётное уменьшается на 1)
+ * @param {number} [dx] - шаг по абсциссе (м), по умолчанию 1
+ * @returns {Float64Array} производная dy/dx в каждой точке
+ */
+export function savitzkyGolayDerivative(values, windowSize, dx = 1) {
+	const n = values.length;
+	if (n === 0) return new Float64Array(0);
+	let w = Math.floor(windowSize);
+	if (w < 3) w = 3;
+	if (w % 2 === 0) w -= 1;
+	const hw = Math.floor(w / 2);
+	const step = Number.isFinite(dx) && dx > 0 ? dx : 1;
+	const out = new Float64Array(n);
+	for (let i = 0; i < n; i++) {
+		const start = Math.max(0, i - hw);
+		const end = Math.min(n - 1, i + hw);
+		let sx = 0;
+		let sy = 0;
+		let sxx = 0;
+		let sxy = 0;
+		let count = 0;
+		let bad = false;
+		for (let j = start; j <= end; j++) {
+			const v = values[j];
+			if (!Number.isFinite(v)) {
+				bad = true;
+				break;
+			}
+			const x = j - i;
+			sx += x;
+			sy += v;
+			sxx += x * x;
+			sxy += x * v;
+			count++;
+		}
+		if (bad || count < 2) {
+			out[i] = NaN;
+			continue;
+		}
+		const denom = count * sxx - sx * sx;
+		if (Math.abs(denom) < 1e-300) {
+			out[i] = 0;
+			continue;
+		}
+		const a1 = (count * sxy - sx * sy) / denom;
+		out[i] = a1 / step;
+	}
+	return out;
 }
 
 // ---------------------------------------------------------------------------
